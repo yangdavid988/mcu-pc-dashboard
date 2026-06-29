@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  SOC_NAME: RTL8721F
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v7
+      with:
+        fetch-depth: 1
+        persist-credentials: false
+
+    - name: Checkout SDK repository
+      uses: actions/checkout@v7
+      with:
+        repository: yangdavid988/ameba-rtos
+        ref: release/v1.2
+        path: ameba-rtos
+        persist-credentials: false
+        submodules: 'recursive'
+
+    # ====================================================================
+    # Prebuild — platform dependencies
+    # ====================================================================
+
+    - name: Platform prepare — install system dependencies
+      shell: bash
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y cmake ninja-build jq
+        sudo ln -sf /bin/bash /bin/sh
+        python -m pip install --upgrade pip
+
+    - name: Read prebuilts version from SDK env.sh
+      id: prebuilts
+      shell: bash
+      run: |
+        VER=$(head -n1 ameba-rtos/env.sh | cut -d= -f2)
+        REQ_HASH=$(sha256sum ameba-rtos/tools/requirements.txt | cut -d' ' -f1)
+        echo "prebuilts_version=$VER"  >> "$GITHUB_OUTPUT"
+        echo "req_hash=$REQ_HASH"      >> "$GITHUB_OUTPUT"
+
+    # ====================================================================
+    # Toolchain installation (cached)
+    # ====================================================================
+
+    - name: Cache toolchain
+      uses: actions/cache@v6
+      with:
+        path: toolchain
+        key: toolchain-linux-${{ steps.prebuilts.outputs.prebuilts_version }}
+
+    - name: Cache Python virtual environment
+      id: cache-venv
+      uses: actions/cache@v6
+      with:
+        path: ameba-rtos/.venv
+        key: venv-linux-${{ steps.prebuilts.outputs.req_hash }}
+
+    - name: Setup SDK environment — toolchain + Python venv
+      shell: bash
+      run: |
+        set -e
+
+        # Swap download source: GitHub primary (GitHub Actions → fast),
+        # Aliyun fallback (env.sh default is Aliyun primary, GitHub fallback)
+        sed -i \
+          's|^DOWNLOAD_URL=$PREBUILTS_LINUX_URL_ALIYUN|DOWNLOAD_URL=$PREBUILTS_LINUX_URL|; t; s|^DOWNLOAD_URL_SECOND_SOURCE=$PREBUILTS_LINUX_URL|DOWNLOAD_URL_SECOND_SOURCE=$PREBUILTS_LINUX_URL_ALIYUN|' \
+          ameba-rtos/env.sh
+
+        # Workspace-relative toolchain dir (cacheable, no sudo needed)
+        mkdir -p toolchain
+        export RTK_TOOLCHAIN_DIR="$(cd toolchain && pwd)"
+
+        # env.sh handles:
+        #   - Platform detection
+        #   - Toolchain download + integrity verification (now GitHub primary)
+        #   - Python venv creation + requirements installation
+        #   - setenv.sh sourcing (toolchain PATH, CC, etc.)
+        source ameba-rtos/env.sh
+
+        echo "SDK path:       $AMEBA_SDK"
+        echo "Toolchain dir:  $RTK_TOOLCHAIN_DIR"
+        echo "Prebuilts dir:  $PREBUILTS_DIR"
+        echo "Python venv:    ${VIRTUAL_ENV:-<not activated>}"
+
+    # ====================================================================
+    # Build
+    # ====================================================================
+
+    - name: Build project
+      shell: bash
+      run: |
+        set -e
+        export RTK_TOOLCHAIN_DIR="$(cd toolchain && pwd)"
+        source ameba-rtos/env.sh
+        python ameba-rtos/ameba.py build "$SOC_NAME" -p -D USE_SECOND_SOURCE=True
+
+    - name: Check build output
+      shell: bash
+      run: |
+        OTA_ALL_BIN=$(find build_* -name "ota_all.bin" -type f | head -n 1)
+        if [[ -z "$OTA_ALL_BIN" ]]; then
+          echo "::error::Required output file ota_all.bin not found — build may have failed"
+          exit 1
+        fi
+        echo "✅ Build successful:"
+        ls -lh "$OTA_ALL_BIN"
+        ls -lh "$(dirname "$OTA_ALL_BIN")"/*.bin 2>/dev/null || true

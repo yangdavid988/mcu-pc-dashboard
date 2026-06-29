@@ -1,0 +1,23 @@
+*.d
+*.o
+*.su
+*.i
+*.ii
+*.s
+
+# project build files
+build_*/
+
+.repo/
+.git/
+.vscode
+.cache
+.venv
+.bb_config
+
+# ignore submodules end
+
+# Claude Code
+.claude/
+LOG/
+CLAUDE.md

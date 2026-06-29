@@ -1,0 +1,39 @@
+name: Sync to Gitee
+on:
+  push:
+    branches: [main]
+
+jobs:
+  repo-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check GITEE_TOKEN
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          if [ -z "$GITEE_TOKEN" ]; then
+            echo "Error: GITEE_TOKEN is empty!"
+            exit 1
+          fi
+          echo "GITEE_TOKEN is set correctly."
+
+      - name: Get REPO_NAME
+        run: |
+          echo "REPO_NAME=$(echo ${{ github.repository }} | cut -d'/' -f2)" >> $GITHUB_ENV
+          echo "REPO_OWNER=${{ github.repository_owner }}" >> $GITHUB_ENV
+
+      - name: Set up git config
+        run: |
+          git config user.name "${{ github.actor }} (via CI)"
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
+
+      - name: Mirror to Gitee
+        run: |
+          git remote add gitee https://yangdavid988:${{ secrets.GITEE_TOKEN }}@gitee.com/${{ env.REPO_OWNER }}/${{ env.REPO_NAME }}.git
+          git push gitee HEAD:refs/heads/main --force
