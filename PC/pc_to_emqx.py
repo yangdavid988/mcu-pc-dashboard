@@ -376,20 +376,20 @@ def debug_loop():
                 time.sleep(1)
 
 # ---------- MQTT mode ----------
-def on_connect(client, userdata, flags, rc):
-    if rc == 0:
+def on_connect(client, userdata, flags, reason_code, properties):
+    if reason_code == 0:
         print("[MQTT] Connected successfully")
     else:
-        print(f"[MQTT] Connection failed, return code: {rc}")
+        print(f"[MQTT] Connection failed, return code: {reason_code}")
 
-def on_disconnect(client, userdata, rc):
-    if rc != 0:
+def on_disconnect(client, userdata, flags, reason_code, properties):
+    if reason_code != 0:
         print("[MQTT] Unexpected disconnect, reconnecting...")
     else:
         print("[MQTT] Disconnected normally")
 
 def mqtt_loop():
-    client = mqtt.Client(client_id=MQTT_CLIENT_ID)
+    client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2, client_id=MQTT_CLIENT_ID)
     client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
     client.on_connect = on_connect
     client.on_disconnect = on_disconnect
@@ -414,7 +414,7 @@ def mqtt_loop():
         try:
             stats = get_system_stats()
             payload = json.dumps(stats, ensure_ascii=False)
-            ret = client.publish(MQTT_TOPIC, payload, qos=1)
+            ret = client.publish(MQTT_TOPIC, payload, qos=0)
             if ret.rc == mqtt.MQTT_ERR_SUCCESS:
                 print(f"[PUB] {len(payload)} bytes")
             else:
