@@ -82,4 +82,26 @@ void lcdc_core_register_flip_done(void (*cb)(void *));
 /* Record one flush_cb call (called by lcd_drv.c, stats flush->flip latency) */
 void lcdc_core_debug_flush_called(void);
 
+/* ========================================================================
+ * Diagnostic getters (always-on, for cross-task freeze detection)
+ * ======================================================================== */
+
+/* Returns last FRD (frame-done) ISR tick in ms */
+uint32_t lcdc_core_get_last_frd_tick(void);
+
+/* Returns last LINE ISR tick in ms */
+uint32_t lcdc_core_get_last_line_tick(void);
+
+/* Returns last flip (pending consumed by LINE) tick in ms */
+uint32_t lcdc_core_get_last_flip_tick(void);
+
+/* Returns FRD interrupt count (number of frames completed) */
+uint32_t lcdc_core_get_frd_count(void);
+
+/* Returns number of page flips (LINE consumed pending_flip) */
+uint32_t lcdc_core_get_flip_count(void);
+
+/* Returns pend_overwrite count */
+uint32_t lcdc_core_get_pend_overwrite(void);
+
 #endif /* LCDC_CORE_H */

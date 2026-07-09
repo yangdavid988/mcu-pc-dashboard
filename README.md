@@ -101,7 +101,7 @@ source env.sh
 
 On Windows, use `env.ps1` which requires the SDK `env.bat` and the environment variable `AMEBA_ENV_PATH`:
 ```powershell
-.\env.ps1
+.\env.bat
 ```
 
 ⚡ **Requires SDK version release/v1.2**. LVGL 9.3 support is already included in this SDK version.

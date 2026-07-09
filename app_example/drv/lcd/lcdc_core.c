@@ -10,29 +10,31 @@
 #include "os_wrapper.h"
 #include "string.h"
 #include "stdlib.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
-/* ========================================================================
- * Debug switch
- * ======================================================================== */
-#define LCDC_DEBUG_ENABLE       0       /* 1=enable lcdc_debug_log() output */
+ /* ========================================================================
+  * Debug switch
+  * ======================================================================== */
+#define LCDC_DEBUG_ENABLE       0       /* 0=disable (was 1 during root-cause investigation; ISR logging causes Heisenbug + ISR-safety concern) */
 
-/* ========================================================================
- * Constants
- * ======================================================================== */
+  /* ========================================================================
+   * Constants
+   * ======================================================================== */
 #define WIDTH                       800
 #define HEIGHT                      480
 #define LCDC_LINE_NUM_INTR_DEF      (HEIGHT * 5 / 6)   /* line 400 */
 
-/* ========================================================================
- * Internal state
- * ======================================================================== */
-static const lcdc_screen_cfg_t *g_cfg = NULL;
-static volatile u8 *g_buffer = NULL;
+   /* ========================================================================
+    * Internal state
+    * ======================================================================== */
+static const lcdc_screen_cfg_t* g_cfg = NULL;
+static volatile u8* g_buffer = NULL;
 static volatile int g_refresh = 0;
 
 /* VBlank sync: accumulate dirty region, flush DCache during VBlank (eliminate tearing) */
 static volatile u32 g_dirty_start = 0;
-static volatile u32 g_dirty_end   = 0;
+static volatile u32 g_dirty_end = 0;
 static volatile int g_dirty_pending = 0;
 
 static struct {
@@ -42,17 +44,17 @@ static struct {
 } gLcdcIrqInfo;
 
 /* VBlank callback (direct function pointer, no struct wrapper needed) */
-static void (* volatile g_vblank_cb)(void *) = NULL;
-static void * volatile g_data = NULL;
+static void (* volatile g_vblank_cb)(void*) = NULL;
+static void* volatile g_data = NULL;
 
 /* Double-buffer page flip: frame buffer address to switch on VBlank */
 static volatile uint32_t g_pending_flip_fb = 0;
-static void * volatile g_pending_context = NULL;
-static void (* volatile g_flip_done_cb)(void *) = NULL;
+static void* volatile g_pending_context = NULL;
+static void (* volatile g_flip_done_cb)(void*) = NULL;
 
 /* After LINE flips DMA, defer flip_done_cb to FRD,
  * preventing LVGL from writing to the buffer DMA is reading ~3ms before VBlank -> tearing */
-static void * volatile g_flip_done_deferred_ctx = NULL;
+static void* volatile g_flip_done_deferred_ctx = NULL;
 
 /* ========================================================================
  * Debug counters
@@ -73,6 +75,10 @@ typedef struct {
     uint32_t last_frd_tick;
     uint32_t last_flip_tick;
 
+    /* LINE interrupt tracking (fires even without pending flip) */
+    uint32_t line_count;
+    uint32_t last_line_tick;
+
     /* flush->flip latency stats */
     uint32_t lat_total;
     uint32_t lat_min;
@@ -82,16 +88,17 @@ typedef struct {
     uint32_t log_countdown;
 } lcdc_debug_t;
 
-static lcdc_debug_t g_dbg = {
-    .lat_min  = 0xFFFFFFFFU,
+static volatile lcdc_debug_t g_dbg = {
+    .lat_min = 0xFFFFFFFFU,
     .log_countdown = 60,
 };
 
-static void lcdc_debug_log(void)
+__attribute__((unused))static void lcdc_debug_log(void)
 {
 #if LCDC_DEBUG_ENABLE
     uint32_t avg_lat = 0;
-    if (g_dbg.lat_count) {
+    if (g_dbg.lat_count)
+    {
         avg_lat = g_dbg.lat_total / g_dbg.lat_count;
     }
     RTK_LOGS(NOTAG, RTK_LOG_ALWAYS,
@@ -128,16 +135,20 @@ static void lcdc_irq_handler(void)
     IntId = LCDC_GetINTStatus(LCDC);
     LCDC_ClearINT(LCDC, IntId);
 
-    /* -- Frame end interrupt: monitoring + old path -- */
-    if (IntId & LCDC_BIT_LCD_FRD_INTS) {
-        g_dbg.last_frd_tick = rtos_time_get_current_system_time_ms();
+    /* -- Frame end interrupt: counters + old path -- */
+    if (IntId & LCDC_BIT_LCD_FRD_INTS)
+    {
         g_dbg.frd_count++;
+        g_dbg.last_frd_tick = rtos_time_get_current_system_time_ms();
 
         /* [Old path] Single buffer + dirty region accumulation */
-        if (g_dirty_pending || g_refresh) {
-            if (g_dirty_pending) {
+        if (g_dirty_pending || g_refresh)
+        {
+            if (g_dirty_pending)
+            {
                 u32 len = g_dirty_end - g_dirty_start;
-                if (len > 0) {
+                if (len > 0)
+                {
                     DCache_Clean(g_dirty_start, len);
                 }
                 g_dirty_pending = 0;
@@ -148,10 +159,12 @@ static void lcdc_irq_handler(void)
         }
 
         /* Deferred flip_done_cb (DMA address set in LINE, effective after VBlank) */
-        if (g_flip_done_deferred_ctx) {
-            void *ctx = (void *)g_flip_done_deferred_ctx;
+        if (g_flip_done_deferred_ctx)
+        {
+            void* ctx = (void*)g_flip_done_deferred_ctx;
             g_flip_done_deferred_ctx = NULL;
-            if (g_flip_done_cb) {
+            if (g_flip_done_cb)
+            {
                 g_flip_done_cb(ctx);
             }
         }
@@ -164,40 +177,54 @@ static void lcdc_irq_handler(void)
      * Note: flip_done_cb (-> lv_display_flush_ready) is NOT called in LINE,
      * but deferred to FRD (when frame truly ends). If called immediately in LINE, LVGL
      * starts writing to the other buffer, but DMA is still reading it before VBlank -> tearing (~3ms window). */
-    if (IntId & LCDC_BIT_LCD_LIN_INTS) {
-        if (g_pending_flip_fb) {
+    if (IntId & LCDC_BIT_LCD_LIN_INTS)
+    {
+        /* Track every LINE interrupt (even without pending flip — for stall detection) */
+        g_dbg.line_count++;
+        g_dbg.last_line_tick = rtos_time_get_current_system_time_ms();
+
+        if (g_pending_flip_fb)
+        {
             LCDC_DMAImgCfg(LCDC, g_pending_flip_fb);
             LCDC_ShadowReloadConfig(LCDC);
-            g_dbg.last_flip_tick = rtos_time_get_current_system_time_ms();
-            g_dbg.flip_count++;
 
-            uint32_t lat = g_dbg.last_flip_tick - g_dbg.last_flush_tick;
-            g_dbg.lat_total += lat;
-            g_dbg.lat_count++;
-            if (lat < g_dbg.lat_min) g_dbg.lat_min = lat;
-            if (lat > g_dbg.lat_max) g_dbg.lat_max = lat;
+            /* Flip counters + flush→flip latency (rtos_time_* is ISR-safe: uses xTaskGetTickCountFromISR) */
+            {
+                g_dbg.flip_count++;
+                g_dbg.last_flip_tick = rtos_time_get_current_system_time_ms();
+
+                uint32_t lat = g_dbg.last_flip_tick - g_dbg.last_flush_tick;
+                g_dbg.lat_total += lat;
+                g_dbg.lat_count++;
+                if (lat < g_dbg.lat_min) g_dbg.lat_min = lat;
+                if (lat > g_dbg.lat_max) g_dbg.lat_max = lat;
+
+                /* Periodic LCDC debug log (every ~60 flips, ~1s at 60fps) */
+                if (g_dbg.log_countdown) { g_dbg.log_countdown--; }
+                if (g_dbg.log_countdown == 0) {
+                    lcdc_debug_log();
+                    g_dbg.log_countdown = 60;
+                }
+            }
 
             /* Defer flip_done_cb to FRD to avoid ~3ms tearing window */
-            g_flip_done_deferred_ctx = (void *)g_pending_context;
+            g_flip_done_deferred_ctx = (void*)g_pending_context;
             g_pending_flip_fb = 0;
             g_pending_context = NULL;
-
-            if (g_dbg.log_countdown) { g_dbg.log_countdown--; }
-            if (g_dbg.log_countdown == 0) {
-                lcdc_debug_log();
-                g_dbg.log_countdown = 60;
-            }
         }
     }
 
     /* VBlank notification (official SDK calls back at LINE position, not true VBlank) */
-    if (IntId & LCDC_BIT_LCD_LIN_INTEN) {
-        if (g_vblank_cb) {
+    if (IntId & LCDC_BIT_LCD_LIN_INTEN)
+    {
+        if (g_vblank_cb)
+        {
             g_vblank_cb(g_data);
         }
     }
 
-    if (IntId & LCDC_BIT_DMA_UN_INTS) {
+    if (IntId & LCDC_BIT_DMA_UN_INTS)
+    {
         RTK_LOGS(NOTAG, RTK_LOG_ALWAYS, "intr: dma udf !!! \r\n");
         g_dbg.underflow_count++;
     }
@@ -206,7 +233,7 @@ static void lcdc_irq_handler(void)
 /* ========================================================================
  * LCDC driver initialization (read timing params from config table)
  * ======================================================================== */
-static void lcdc_driver_init(const lcdc_screen_cfg_t *cfg)
+static void lcdc_driver_init(const lcdc_screen_cfg_t* cfg)
 {
     LCDC_RGBInitTypeDef LCDC_RGBInitStruct;
 
@@ -230,7 +257,8 @@ static void lcdc_driver_init(const lcdc_screen_cfg_t *cfg)
     LCDC_RGBInitStruct.Panel_RgbTiming.Flags.RgbHsPolar = LCDC_RGB_HS_PUL_LOW_LEV_SYNC;
     LCDC_RGBInitStruct.Panel_RgbTiming.Flags.RgbVsPolar = LCDC_RGB_VS_PUL_LOW_LEV_SYNC;
 
-    switch (cfg->image_format) {
+    switch (cfg->image_format)
+    {
     case LDC_IMG_FMT_RGB565:
         LCDC_RGBInitStruct.Panel_Init.InputFormat = LCDC_INPUT_FORMAT_RGB565;
         break;
@@ -254,7 +282,7 @@ static void lcdc_driver_init(const lcdc_screen_cfg_t *cfg)
     LCDC_DMAImgCfg(LCDC, (u32)cfg->fb_base + WIDTH * HEIGHT * 4);
     LCDC_ShadowReloadConfig(LCDC);
 
-    memset((void *)cfg->fb_base, 0, WIDTH * HEIGHT * 4 * 2);
+    memset((void*)cfg->fb_base, 0, WIDTH * HEIGHT * 4 * 2);
     DCache_Clean((u32)cfg->fb_base, WIDTH * HEIGHT * 4 * 2);
 
     InterruptRegister((IRQ_FUN)lcdc_irq_handler,
@@ -277,12 +305,13 @@ static void lcdc_driver_init(const lcdc_screen_cfg_t *cfg)
  * Public API
  * ======================================================================== */
 
-void lcdc_core_init(const lcdc_screen_cfg_t *cfg)
+void lcdc_core_init(const lcdc_screen_cfg_t* cfg)
 {
     g_cfg = cfg;
-    g_buffer = (u8 *)cfg->fb_base;
+    g_buffer = (u8*)cfg->fb_base;
 
-    if (cfg->backlight_init) {
+    if (cfg->backlight_init)
+    {
         cfg->backlight_init();
     }
 
@@ -313,12 +342,13 @@ void lcdc_core_init(const lcdc_screen_cfg_t *cfg)
     LCDC_Cmd(LCDC, ENABLE);
 }
 
-void lcdc_core_flush_buffer(uint8_t *buffer)
+void lcdc_core_flush_buffer(uint8_t* buffer)
 {
     if (!g_cfg)
         return;
 
-    switch (g_cfg->image_format) {
+    switch (g_cfg->image_format)
+    {
     case LDC_IMG_FMT_ARGB8888:
         g_buffer = buffer;
         DCache_Clean((u32)g_buffer, WIDTH * HEIGHT * 4);
@@ -335,19 +365,19 @@ void lcdc_core_flush_buffer(uint8_t *buffer)
     g_refresh = 1;
 }
 
-void lcdc_core_get_info(int *width, int *height)
+void lcdc_core_get_info(int* width, int* height)
 {
-    if (width)  *width  = WIDTH;
+    if (width)  *width = WIDTH;
     if (height) *height = HEIGHT;
 }
 
-void lcdc_core_register_vblank(void (*cb)(void *), void *user_data)
+void lcdc_core_register_vblank(void (*cb)(void*), void* user_data)
 {
     g_vblank_cb = cb;
     g_data = user_data;
 }
 
-void lcdc_core_trigger_refresh(uint8_t *buffer)
+void lcdc_core_trigger_refresh(uint8_t* buffer)
 {
     g_buffer = buffer;
     g_refresh = 1;
@@ -363,17 +393,21 @@ void lcdc_core_mark_dirty(u32 off, u32 len)
 
     u32 fb_size = (u32)WIDTH * HEIGHT * 4;
     /* Clip len to ensure dirty range stays within frame buffer boundary, prevent DCache_Clean overflow */
-    if (off < fb_size) {
+    if (off < fb_size)
+    {
         if (off + len > fb_size)
             len = fb_size - off;
         u32 area_start = (u32)g_cfg->fb_base + off;
-        u32 area_end   = area_start + len;
+        u32 area_end = area_start + len;
 
-        if (!g_dirty_pending) {
+        if (!g_dirty_pending)
+        {
             g_dirty_start = area_start;
-            g_dirty_end   = area_end;
+            g_dirty_end = area_end;
             g_dirty_pending = 1;
-        } else {
+        }
+        else
+        {
             if (area_start < g_dirty_start)
                 g_dirty_start = area_start;
             if (area_end > g_dirty_end)
@@ -393,16 +427,22 @@ void lcdc_core_flush_now(uint32_t fb_addr)
  * Double-buffer page flip API
  * ======================================================================== */
 
-void lcdc_core_set_pending_flip(uint32_t fb_addr, void *context)
+void lcdc_core_set_pending_flip(uint32_t fb_addr, void* context)
 {
-    if (g_pending_flip_fb) {
+    /* Critical section: must write fb_addr AND context atomically w.r.t. LINE ISR.
+     * If ISR fires between the two writes, it reads new fb_addr with stale context,
+     * leading to flip_done_cb(NULL) → lv_display_flush_ready(NULL) → LVGL freeze. */
+    taskENTER_CRITICAL();
+    if (g_pending_flip_fb)
+    {
         g_dbg.pend_overwrite++;  /* Pending flip address overwritten — previous flip wasn't processed */
     }
     g_pending_flip_fb = fb_addr;
     g_pending_context = context;
+    taskEXIT_CRITICAL();
 }
 
-void lcdc_core_register_flip_done(void (*cb)(void *))
+void lcdc_core_register_flip_done(void (*cb)(void*))
 {
     g_flip_done_cb = cb;
 }
@@ -411,10 +451,44 @@ void lcdc_core_register_flip_done(void (*cb)(void *))
  * Debug API
  * ======================================================================== */
 
-/** Record one flush_cb call (called by lcd_drv.c, stats flush->flip latency) */
+ /** Record one flush_cb call (called by lcd_drv.c, stats flush->flip latency) */
 void lcdc_core_debug_flush_called(void)
 {
     g_dbg.flush_count++;
     g_dbg.last_flush_tick = rtos_time_get_current_system_time_ms();
+}
+
+/* ========================================================================
+ * Always-on diagnostic getters
+ * ======================================================================== */
+
+uint32_t lcdc_core_get_last_frd_tick(void)
+{
+    return g_dbg.last_frd_tick;
+}
+
+uint32_t lcdc_core_get_last_line_tick(void)
+{
+    return g_dbg.last_line_tick;
+}
+
+uint32_t lcdc_core_get_last_flip_tick(void)
+{
+    return g_dbg.last_flip_tick;
+}
+
+uint32_t lcdc_core_get_frd_count(void)
+{
+    return g_dbg.frd_count;
+}
+
+uint32_t lcdc_core_get_flip_count(void)
+{
+    return g_dbg.flip_count;
+}
+
+uint32_t lcdc_core_get_pend_overwrite(void)
+{
+    return g_dbg.pend_overwrite;
 }
 

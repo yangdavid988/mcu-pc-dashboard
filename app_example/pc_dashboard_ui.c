@@ -2,6 +2,7 @@
 #include "pc_dashboard_layout.h"
 #include "pc_dashboard_theme.h"
 #include "gpio_control.h"
+#include "drv/lcd/lcdc_core.h"
 #include <math.h>
 
 /*
@@ -244,6 +245,21 @@ void __attribute__((unused)) dashboard_timer_cb(lv_timer_t* timer)
 {
     LV_UNUSED(timer);
 
+    /* UI timer alive (~1 per 5s) */
+    {
+        static uint32_t s_diag_ui_tick = 0;
+        static uint32_t s_diag_ui_cnt = 0;
+        uint32_t _now = rtos_time_get_current_system_time_ms();
+        if (_now - s_diag_ui_tick >= 5000)
+        {
+            s_diag_ui_tick = _now;
+#if defined(CONFIG_DIAG_HEARTBEAT)
+            RTK_LOGI("V3_UI", "DIAG: ui cnt=%lu\n", (unsigned long)s_diag_ui_cnt);
+#endif
+        }
+        s_diag_ui_cnt++;
+    }
+
     update_clock_display();
     update_layout_clock();
     update_mqtt_warning();
@@ -270,16 +286,28 @@ void __attribute__((unused)) dashboard_timer_cb(lv_timer_t* timer)
         }
     }
 
+    /* FRD/line stall detection (immediate, outside throttle)
+     * Warns if LCDC interrupts appear to have stopped */
+    {
+        static uint32_t s_last_frd_warn_tick = 0;
+        uint32_t now = rtos_time_get_current_system_time_ms();
+        uint32_t frd_age = now - lcdc_core_get_last_frd_tick();
+        /* Skip until first FRD fires (last_frd_tick starts at 0 → false stall alarm) */
+        if (lcdc_core_get_frd_count() > 0 &&
+            (frd_age > 1000) && ((now - s_last_frd_warn_tick) >= 10000))
+        {
+            s_last_frd_warn_tick = now;
+            RTK_LOGI("V3_UI",
+                "DIAG: FRD stall detected! age=%lu ms flip=%lu line=0x%lx ovr=%lu\n",
+                (unsigned long)frd_age,
+                (unsigned long)lcdc_core_get_flip_count(),
+                (unsigned long)lcdc_core_get_last_line_tick(),
+                (unsigned long)lcdc_core_get_pend_overwrite());
+        }
+    }
+
     if (!g_new_data_ready)
     {
-        /* No new data, but log every 60th tick (~60s) for alive check */
-        static uint32_t alive_tick = 0;
-        if (++alive_tick >= 60)
-        {
-            alive_tick = 0;
-            RTK_LOGI("V3_UI", "timer alive, layout=%s theme=%s\n",
-                layout_get_name(g_layout_id), theme_get_name(g_theme_id));
-        }
         return;
     }
 

@@ -11,18 +11,13 @@
 #define GPIO_DEBOUNCE_MS        250
 
 /*
- * ISR-safe timestamp retrieval
- *
- * FreeRTOS xTaskGetTickCount() directly reads the global volatile counter
- * xTickCount, which is safe in both ISR and task contexts (read-only,
- * no critical section or semaphore operations).
- *
- * Does NOT use rtos_time_get_current_system_time_ms() because its wrapper
- * may introduce non-ISR-safe calls (e.g., mutexes) that could deadlock in ISR.
+ * ISR-safe timestamp: use SDK wrapper which internally selects
+ * xTaskGetTickCountFromISR() in ISR context, xTaskGetTickCount() in task.
+ * DO NOT call xTaskGetTickCount() directly in ISR (may use taskENTER_CRITICAL).
  */
 static inline uint32_t isr_safe_tick_ms(void)
 {
-    return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    return rtos_time_get_current_system_time_ms();
 }
 
 /* ===== GPIO interrupt objects ===== */
@@ -33,9 +28,9 @@ static gpio_irq_t gpio_theme;
 static volatile bool g_pending_layout_switch = false;
 static volatile bool g_pending_theme_switch = false;
 
-/* ===== ISR debounce timestamps ===== */
-static uint32_t g_last_layout_ms = 0;
-static uint32_t g_last_theme_ms = 0;
+/* ===== ISR debounce timestamps (volatile: written in ISR, read in ISR) ===== */
+static volatile uint32_t g_last_layout_ms = 0;
+static volatile uint32_t g_last_theme_ms = 0;
 
 /* ===== Layout switch ISR ===== */
 static void layout_irq_handler(uint32_t id, uint32_t event)
