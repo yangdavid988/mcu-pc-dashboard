@@ -101,7 +101,7 @@ source env.sh
 
 在 Windows 下使用 `env.ps1`，需要 SDK 的 `env.bat` 文件及环境变量 `AMEBA_ENV_PATH`：
 ```powershell
-.\env.ps1
+.\env.bat
 ```
 
 ⚡ **需要 SDK 版本 release/v1.2**。该 SDK 版本已包含 LVGL 9.3 支持。

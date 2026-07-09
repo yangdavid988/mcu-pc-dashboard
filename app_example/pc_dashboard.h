@@ -43,6 +43,11 @@
 #ifndef JSON_PARSE_BUF_SIZE
 #define JSON_PARSE_BUF_SIZE         2048    /* Increased buffer for larger JSON payloads (long GPU names, hostname) */
 #endif
+
+/* MQTT task stack size (guarded for override in app_main.c or CMake) */
+#ifndef TASK_STACK_MQTT
+#define TASK_STACK_MQTT             12288
+#endif
 #define MQTT_TOPIC_PC_STATS         "pc/stats"
 #define MQTT_TOPIC_SHT3X            "humiture/measurement"
 #define MQTT_SUB_TOPIC              "pc/stats"      /* Subscribe to PC stats topic */
@@ -140,6 +145,10 @@ extern PC_Stats_t       g_pc_stats;
 extern volatile bool    g_new_data_ready;
 extern volatile bool    g_mqtt_connected;           /* MQTT connection status */
 extern volatile uint32_t g_data_last_tick;          /* System tick (ms) when last data was received */
+
+/* Diagnostic counters */
+extern volatile uint32_t g_mqtt_msg_count;          /* Total MQTT messages received */
+extern volatile uint32_t g_mqtt_last_msg_tick;      /* Tick when last msg was received */
 
 /* Reset g_pc_stats to defaults (called on MQTT disconnect) */
 void pc_stats_reset_to_default(void);

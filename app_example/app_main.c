@@ -5,20 +5,25 @@
 #include "gpio_control.h"
 #include "WiFi_reconnect.h"
 /* PPE hardware-accelerated draw unit (SDK AmebaGreen2 AG2 driver) */
-#include "lv_draw_ppe.h"
+//#include "lv_draw_ppe.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "ameba_pmu.h"      /* pmu_acquire_wakelock */
+
+/* PMU device ID for LCDC — hold wakelock during LVGL operation to prevent
+ * tickless idle from gating LCDC clock (LCDC is SOC domain, cannot wake CPU). */
+#define PMU_LCDC_DEVICE      PMU_OS
 
 #ifndef TAG
 #define TAG     "APP_MAIN"
 #endif
 
-/* ========================================================================
- * Fast flash — driven by LVGL timer, aligned with render cycle
- * ======================================================================== */
- /* FAST_FLASH_MS now comes from threshold_config.h: g_flash_threshold.flash_interval_ms */
+ /* ========================================================================
+  * Fast flash — driven by LVGL timer, aligned with render cycle
+  * ======================================================================== */
+  /* FAST_FLASH_MS now comes from threshold_config.h: g_flash_threshold.flash_interval_ms */
 
- /* LVGL thread parameters */
+  /* LVGL thread parameters */
 #ifndef TASK_STACK_LVGL
 #define TASK_STACK_LVGL         8192
 #endif
@@ -64,6 +69,11 @@ static void lvgl_main_thread(void* parameters)
     /* LCD initialization */
     lcd_init();
 
+    /* Hold PMU wakelock for entire LVGL runtime — prevents tickless idle from
+     * entering sleep modes that gate LCDC clock. LCDC (SOC domain) cannot wake CPU,
+     * so any sleep during a flip window would cause permanent freeze. */
+    pmu_acquire_wakelock(PMU_LCDC_DEVICE);
+
     /* Get framebuffer base addresses (auto-selected by screen type, dual-buffer) */
     {
         uint32_t fb1, fb2;
@@ -104,13 +114,27 @@ static void lvgl_main_thread(void* parameters)
 
     RTK_LOGI(TAG, "LVGL UI ready, starting main loop...\n");
 
-    /* LVGL main loop — dynamic sleep, wake on demand */
-    while (1)
+    /* LVGL main loop */
     {
-        uint32_t time_till_next = lv_timer_handler();
-        if (time_till_next == LV_NO_TIMER_READY)
-            time_till_next = LV_DEF_REFR_PERIOD;
-        rtos_time_delay_ms(time_till_next);
+        uint32_t diag_lvgl_tick = 0;
+        uint32_t diag_lvgl_cnt = 0;
+        while (1)
+        {
+            uint32_t _now = rtos_time_get_current_system_time_ms();
+            if (_now - diag_lvgl_tick >= 5000)
+            {
+                diag_lvgl_tick = _now;
+#if defined(CONFIG_DIAG_HEARTBEAT)
+                RTK_LOGI(TAG, "DIAG: lvgl cnt=%lu\n", (unsigned long)diag_lvgl_cnt);
+#endif
+            }
+            diag_lvgl_cnt++;
+
+            uint32_t time_till_next = lv_timer_handler();
+            if (time_till_next == LV_NO_TIMER_READY)
+                time_till_next = LV_DEF_REFR_PERIOD;
+            rtos_time_delay_ms(time_till_next);
+        }
     }
 
     rtos_task_delete(NULL);

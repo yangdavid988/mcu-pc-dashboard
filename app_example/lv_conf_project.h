@@ -14,32 +14,35 @@
  *     → lv_conf_internal.h defaults (skipped because already defined)
  */
 
-/* Include the SDK's original lv_conf.h from the global include path.
- * port/amebadplus/ is globally included by the LVGL component's lvgl.cmake. */
+ /* Include the SDK's original lv_conf.h from the global include path.
+  * port/amebadplus/ is globally included by the LVGL component's lvgl.cmake. */
 #include "lv_conf.h"
 
-/* ========================================================================
- * Color — override to 32-bit ARGB8888 to match LCDC HW format.
- * LCDC is configured as LDC_IMG_FMT_ARGB8888, and the frame buffer
- * is allocated as w*h*4 bytes.  SDK default is 16-bit RGB565.
- * ======================================================================== */
+#undef LV_USE_PERF_MONITOR
+#define LV_USE_PERF_MONITOR 0
+
+  /* ========================================================================
+   * Color — override to 32-bit ARGB8888 to match LCDC HW format.
+   * LCDC is configured as LDC_IMG_FMT_ARGB8888, and the frame buffer
+   * is allocated as w*h*4 bytes.  SDK default is 16-bit RGB565.
+   * ======================================================================== */
 #undef  LV_COLOR_DEPTH
 #define LV_COLOR_DEPTH 32
 
-/* 32-bit color doesn't need byte swap; undef to avoid confusion. */
+   /* 32-bit color doesn't need byte swap; undef to avoid confusion. */
 #undef  LV_COLOR_16_SWAP
 
 /* ========================================================================
- * Memory — double the pool to handle V3 layout recreation + fragmentation
- * SDK default: 64KB, override: 128KB
+ * Memory — quad the pool: canvas draw_buf (78KB) + ~100 widgets + layout transitions
+ * SDK default: 64KB, was 128KB before fragmentation analysis
  * ======================================================================== */
 #undef  LV_MEM_SIZE
-#define LV_MEM_SIZE (128 * 1024U)
+#define LV_MEM_SIZE (256 * 1024U)
 
-/* ========================================================================
- * Font Overrides — enable full Montserrat font family
- * SDK default only enables 14/20/24/26.
- * ======================================================================== */
+ /* ========================================================================
+  * Font Overrides — enable full Montserrat font family
+  * SDK default only enables 14/20/24/26.
+  * ======================================================================== */
 
 #undef  LV_FONT_MONTSERRAT_8
 #define LV_FONT_MONTSERRAT_8  1
@@ -50,7 +53,7 @@
 #undef  LV_FONT_MONTSERRAT_12
 #define LV_FONT_MONTSERRAT_12 1
 
-/* 14 is already 1 in SDK, keep as-is */
+  /* 14 is already 1 in SDK, keep as-is */
 
 #undef  LV_FONT_MONTSERRAT_16
 #define LV_FONT_MONTSERRAT_16 1

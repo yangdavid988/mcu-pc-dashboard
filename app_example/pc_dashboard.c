@@ -9,6 +9,10 @@ volatile bool   g_new_data_ready = false;
 volatile bool   g_mqtt_connected = false;
 volatile uint32_t g_data_last_tick = 0;
 
+/* Diagnostic counters */
+volatile uint32_t g_mqtt_msg_count = 0;       /* Total MQTT messages received */
+volatile uint32_t g_mqtt_last_msg_tick = 0;   /* Tick when last msg was received */
+
 /* Internal globals */
 static MQTTClient          g_mqtt_client;
 static rtos_task_t         g_mqtt_task_handle = NULL;
@@ -340,16 +344,24 @@ static void parse_pc_stats_json(const char* payload)
     else
         stats.cpu_temp = 0.0f;
 
-    if (json_extract_int(payload, "boot_time", &ival))
-        stats.boot_time = (uint32_t)ival;
+    /* Parse boot_time via strtoull to avoid float32 precision loss */
+    {
+        uint64_t bt_u64 = 0;
+        if (json_extract_u64(payload, "boot_time", &bt_u64))
+            stats.boot_time = (uint32_t)bt_u64;
+    }
     if (json_extract_int(payload, "process_count", &ival))
         stats.process_count = (uint32_t)ival;
     if (json_extract_int(payload, "cpu_cores_logical", &ival))
         stats.cpu_cores_logical = (uint8_t)ival;
     if (json_extract_int(payload, "cpu_cores_physical", &ival))
         stats.cpu_cores_physical = (uint8_t)ival;
-    if (json_extract_int(payload, "timestamp", &ival))
-        stats.timestamp = (uint32_t)ival;
+    /* Parse timestamp via strtoull to avoid float32 precision loss (2026 timestamps exceed 2^24 mantissa) */
+    {
+        uint64_t ts_u64 = 0;
+        if (json_extract_u64(payload, "timestamp", &ts_u64))
+            stats.timestamp = (uint32_t)ts_u64;
+    }
 
     if (json_extract_number(payload, "battery_percent", &fval))
         stats.battery_percent = fval;
@@ -441,11 +453,15 @@ static void parse_pc_stats_json(const char* payload)
 
     stats.has_data = true;
 
+    /* Sample timestamp BEFORE critical section �� rtos_time_* may use mutex/spinlock
+     * which cannot be acquired with interrupts disabled. */
+    uint32_t now_tick = rtos_time_get_current_system_time_ms();
+
     /* Atomic global update (disable interrupts to prevent LVGL thread from reading partial state) */
     taskENTER_CRITICAL();
     memcpy(&g_pc_stats, &stats, sizeof(PC_Stats_t));
     g_new_data_ready = true;
-    g_data_last_tick = rtos_time_get_current_system_time_ms();
+    g_data_last_tick = now_tick;
     taskEXIT_CRITICAL();
 }
 
@@ -502,11 +518,18 @@ static void messageArrived(MessageData* data, void* discard)
     char* payload = (char*)data->message->payload;
     int   payload_len = data->message->payloadlen;
 
-    /* Copy payload as C string for parsing */
-    char json_buf[JSON_PARSE_BUF_SIZE];
+    /* Copy payload as C string for parsing.
+     * Static buffer: 2048 bytes on stack would strain MQTT task (8192B stack).
+     * Reuse same buffer across invocations since this runs in MQTT task context only. */
+    static char json_buf[JSON_PARSE_BUF_SIZE];
     int copy_len = payload_len;
     if (copy_len >= (int)sizeof(json_buf))
+    {
         copy_len = sizeof(json_buf) - 1;
+        mqtt_printf(MQTT_INFO,
+            "DIAG: msg truncated! payload_len=%d buf=%u\n",
+            payload_len, (unsigned int)sizeof(json_buf));
+    }
     memcpy(json_buf, payload, copy_len);
     json_buf[copy_len] = '\0';
 
@@ -525,6 +548,10 @@ static void messageArrived(MessageData* data, void* discard)
     {
         /* Silently ignore unmatched topics */
     }
+
+    /* Diagnostics: update message counter (called from MQTT task context) */
+    g_mqtt_msg_count++;
+    g_mqtt_last_msg_tick = rtos_time_get_current_system_time_ms();
 }
 
 /* ========================================================================
@@ -638,6 +665,21 @@ void pc_dashboard_task(void* parameters)
             MQTTSetStatus(&g_mqtt_client, MQTT_START);
         }
 
+        {
+            static uint32_t s_diag_mqtt_tick = 0;
+            static uint32_t s_diag_mqtt_cnt = 0;
+            uint32_t _now = rtos_time_get_current_system_time_ms();
+            if (_now - s_diag_mqtt_tick >= 5000)
+            {
+                s_diag_mqtt_tick = _now;
+#if defined(CONFIG_DIAG_HEARTBEAT)
+                RTK_LOGI(TAG, "DIAG: mqtt cnt=%lu status=%d\n",
+                    (unsigned long)s_diag_mqtt_cnt,
+                    (int)g_mqtt_client.mqttstatus);
+#endif
+            }
+            s_diag_mqtt_cnt++;
+        }
         /* MQTT state machine (connect, subscribe, receive) */
         MQTTDataHandle(&g_mqtt_client,
             &read_fds,
@@ -662,7 +704,7 @@ void pc_dashboard_task(void* parameters)
                 MQTT_SUB_TOPIC_SHT3X);
             int sub_rc = MQTTSubscribe(&g_mqtt_client,
                 MQTT_SUB_TOPIC_SHT3X,
-                QOS2,
+                QOS0,
                 messageArrived);
 
             /* MQTT_TASK mode: MQTTSubscribe() doesn't register handler, do it manually */
@@ -723,7 +765,7 @@ void pc_dashboard_start(void)
         "pc_dashboard_task",
         pc_dashboard_task,
         NULL,
-        8192,
+        TASK_STACK_MQTT,
         tskIDLE_PRIORITY + 2) != RTK_SUCCESS)
     {
         RTK_LOGE(TAG, "Create PC dashboard task failed.\n");
