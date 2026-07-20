@@ -1,11 +1,14 @@
 #include "pc_dashboard.h"
 #include "sdk_compat.h"
+#include "threshold_config.h"
+
 
 /* ========================================================================
  * Global variables
  * ======================================================================== */
 PC_Stats_t      g_pc_stats = { 0 };
 volatile bool   g_new_data_ready = false;
+volatile bool   g_sht3x_pending = false;
 volatile bool   g_mqtt_connected = false;
 volatile uint32_t g_data_last_tick = 0;
 
@@ -22,10 +25,10 @@ static bool                g_sht3x_subscribed = false;   /* Whether SHT3X topic 
  * Simple JSON value extractors (flat JSON format)
  * ======================================================================== */
 
-/*
- * Extract string value: finds "key": "value" pattern
- * Returns number of characters written to out, or -1 if not found
- */
+ /*
+  * Extract string value: finds "key": "value" pattern
+  * Returns number of characters written to out, or -1 if not found
+  */
 static int json_extract_string(const char* json, const char* key,
     char* out, size_t out_size)
 {
@@ -453,7 +456,7 @@ static void parse_pc_stats_json(const char* payload)
 
     stats.has_data = true;
 
-    /* Sample timestamp BEFORE critical section �� rtos_time_* may use mutex/spinlock
+    /* Sample timestamp BEFORE critical section — rtos_time_* may use mutex/spinlock
      * which cannot be acquired with interrupts disabled. */
     uint32_t now_tick = rtos_time_get_current_system_time_ms();
 
@@ -494,6 +497,12 @@ static void parse_sht3x_json(const char* payload)
     }
 
     taskENTER_CRITICAL();
+    /* Read current values for threshold comparison */
+    float cur_temp = g_pc_stats.sht3x_temperature;
+    float cur_humi = g_pc_stats.sht3x_humidity;
+    bool had_data = g_pc_stats.sht3x_valid;
+
+    /* Always update storage with latest values */
     if (temp_ok)
         g_pc_stats.sht3x_temperature = temp_val_c;
     if (temp_f_ok)
@@ -502,7 +511,21 @@ static void parse_sht3x_json(const char* payload)
         g_pc_stats.sht3x_humidity = humi_val;
     g_pc_stats.sht3x_valid = true;
     g_pc_stats.has_data = true;
-    g_new_data_ready = true;
+
+    /* Only trigger a UI refresh if change exceeds threshold — tiny
+     * fluctuations (e.g. ±0.1°C) are discarded to avoid unnecessary
+     * data refreshes that contribute to multi-rect tearing.         */
+    {
+        float d_temp = (temp_ok) ? ((temp_val_c > cur_temp) ? (temp_val_c - cur_temp) : (cur_temp - temp_val_c)) : 0.0f;
+        float d_humi = (humi_ok) ? ((humi_val > cur_humi) ? (humi_val - cur_humi) : (cur_humi - humi_val)) : 0.0f;
+        bool above_threshold = !had_data ||
+            d_temp >= SHT3X_THRESHOLD_TEMP_C ||
+            d_humi >= SHT3X_THRESHOLD_HUMI_PCT;
+        if (above_threshold)
+        {
+            g_sht3x_pending = true;    /* Don't set g_new_data_ready — wait for next JSON refresh sync */
+        }
+    }
     taskEXIT_CRITICAL();
 }
 
@@ -665,6 +688,7 @@ void pc_dashboard_task(void* parameters)
             MQTTSetStatus(&g_mqtt_client, MQTT_START);
         }
 
+        /* MQTT alive heartbeat (~1 per 5s) */
         {
             static uint32_t s_diag_mqtt_tick = 0;
             static uint32_t s_diag_mqtt_cnt = 0;
@@ -680,6 +704,7 @@ void pc_dashboard_task(void* parameters)
             }
             s_diag_mqtt_cnt++;
         }
+
         /* MQTT state machine (connect, subscribe, receive) */
         MQTTDataHandle(&g_mqtt_client,
             &read_fds,

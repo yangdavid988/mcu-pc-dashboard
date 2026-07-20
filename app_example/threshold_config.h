@@ -14,6 +14,10 @@ typedef struct {
     int   flash_interval_ms; // Flash toggle interval (ms)         default: 150
 } flash_threshold_t;
 
+/* SHT3X update threshold — ignore tiny fluctuations to avoid unnecessary refreshes */
+#define SHT3X_THRESHOLD_TEMP_C     0.5f   /* °C, default: ±0.5°C */
+#define SHT3X_THRESHOLD_HUMI_PCT   5.0f   /* %RH, default: ±5% */
+
 #ifndef FLASH_THRESHOLD_EXTERNAL
 static const flash_threshold_t g_flash_threshold = {
     .cpu_pct = 80.0f,
@@ -21,8 +25,8 @@ static const flash_threshold_t g_flash_threshold = {
     .ram_pct = 80.0f,
     .disk_pct = 90.0f,
     .gpu_pct = 80.0f,
-    .bat_low_pct = 90.0f,
-    .env_temp_c = 28.0f,
+    .bat_low_pct = 20.0f,
+    .env_temp_c = 35.0f,
     .flash_interval_ms = 150,
 };
 #else

@@ -9,6 +9,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "ameba_pmu.h"      /* pmu_acquire_wakelock */
+#include "drv/lcd/lcdc_core.h"   /* lcdc_core_flush_commit */
 
 /* PMU device ID for LCDC — hold wakelock during LVGL operation to prevent
  * tickless idle from gating LCDC clock (LCDC is SOC domain, cannot wake CPU). */

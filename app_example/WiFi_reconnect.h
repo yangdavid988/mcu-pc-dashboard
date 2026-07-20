@@ -12,7 +12,7 @@
 
 #define RETRY_LIMIT            10
 #define RETRY_INTERVAL        5000    // ms
-#define SSID                "YOUR_WIFI_SSID"
+#define SSID                "YOUR_WIFI_SSID"	// Replace with your Wi-Fi SSID
 #define PASSWORD            "YOUR_WIFI_PASSWORD"
 
 #define LED1_PIN _PA_14 //G

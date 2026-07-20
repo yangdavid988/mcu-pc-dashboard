@@ -7,7 +7,7 @@ ameba_global_include(${CMAKE_CURRENT_SOURCE_DIR})
 ameba_global_define(LV_CONF_PATH="lv_conf_project.h")
 
 # ===== Screen selection (uncomment the next line to switch to DBL070 instead) =====
-# add_definitions(-DUSE_DBL070)
+add_definitions(-DUSE_DBL070)
 
 # ===== Private: builds our target =====
 set(private_sources)

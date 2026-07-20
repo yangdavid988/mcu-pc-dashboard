@@ -54,13 +54,17 @@
 #define MQTT_SUB_TOPIC_SHT3X       "humiture/measurement"  /* SHT3X temperature/humidity topic */
 #define MQTT_BROKER_ADDRESS         "YOUR_BROKER.emqxsl.cn"
 #define MQTT_BROKER_PORT            8883
-#define MQTT_CLIENT_ID              "PC_DASHBOARD_001"
+#ifdef USE_DBL070
+#define MQTT_CLIENT_ID              "PC_DASHBOARD_MCU_1_COM19"
+#else
+#define MQTT_CLIENT_ID              "PC_DASHBOARD_MCU_2_COM18"
+#endif
 #define MQTT_USERNAME               "YOUR_MQTT_USERNAME"
 #define MQTT_PASSWORD               "YOUR_MQTT_PASSWORD"
 
- /* ========================================================================
-  * UI Update Interval (ms)
-  * ======================================================================== */
+/* ========================================================================
+ * UI Update Interval (ms)
+ * ======================================================================== */
 #define UI_UPDATE_INTERVAL_MS       1000             /* Clock updates every second, data refreshes only on new arrival */
 #define UTC8_OFFSET_SEC             28800            /* UTC+8 offset (8 hours) */
 
@@ -143,6 +147,7 @@ typedef struct
  * ======================================================================== */
 extern PC_Stats_t       g_pc_stats;
 extern volatile bool    g_new_data_ready;
+extern volatile bool    g_sht3x_pending;
 extern volatile bool    g_mqtt_connected;           /* MQTT connection status */
 extern volatile uint32_t g_data_last_tick;          /* System tick (ms) when last data was received */
 
