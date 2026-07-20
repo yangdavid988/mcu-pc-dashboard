@@ -1,0 +1,25 @@
+# GitHub Linguist Language Override
+# ===================================
+# Ensure the repo is detected as C (not diluted by Python/env scripts)
+
+# Exclude PC collector (Python) from language stats
+PC/*              linguist-vendored=true
+
+# Exclude documentation and config files
+*.md              linguist-documentation=true
+*.yml             linguist-documentation=true
+*.yaml            linguist-documentation=true
+*.json            linguist-documentation=true
+*.conf            linguist-documentation=true
+
+# Exclude environment/setup scripts
+*.sh              linguist-documentation=true
+*.ps1             linguist-documentation=true
+*.bat             linguist-documentation=true
+
+# Exclude images
+*.jpg             linguist-documentation=true
+*.png             linguist-documentation=true
+
+# Force .h headers to be counted as C (not C++)
+*.h               linguist-language=C
