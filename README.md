@@ -1,12 +1,37 @@
 * [中文版](./README_CN.md)
 
-### PC Dashboard Monitor for Ameba RTL8721F (FreeRTOS)
+---
+<div align="center">
+
+# PC Dashboard Monitor for Ameba RTL8721F (FreeRTOS)
+
+</div>
+
+[![RTOS](https://img.shields.io/badge/RTOS-FreeRTOS-green)](https://freertos.org)
+[![SDK-Ver](https://badgen.net/badge/SDK/Ameba%20RTOS/blue)](https://aiot.realmcu.com/en/latest/rtos/index.html)
+[![Version](https://badgen.net/github/release/Ameba-AIoT/ameba-rtos)](https://github.com/Ameba-AIoT/ameba-rtos/releases)
+[![Platform](https://img.shields.io/badge/platform-RTL8721F-blue)]()
+[![License](https://badgen.net/badge/License/Apache%202.0/lightgrey)](LICENSE)
+[![Gitee Mirror](https://badgen.net/badge/mirror/Gitee/c71d23?icon=git)](https://gitee.com/yangdavid988/mcu-pc-dashboard)
+[![Language](https://badgen.net/badge/language/C/blue)](https://github.com/yangdavid988/mcu-pc-dashboard/search?l=c)
+[![UI](https://img.shields.io/badge/LVGL-9.3-brightgreen)](https://lvgl.io)
+[![CI Linux](https://badgen.net/badge/Linux/success/green?icon=github)](https://github.com/yangdavid988/mcu-pc-dashboard/actions/workflows/CI_build_check.yml)
+[![Last Commit](https://badgen.net/github/last-commit/yangdavid988/mcu-pc-dashboard)](https://github.com/yangdavid988/mcu-pc-dashboard)
+[![Status](https://img.shields.io/badge/status-updating-yellow)]()
 
 🚀 A PC hardware resource monitor that subscribes to MQTT topics `pc/stats` (PC stats) and `humiture/measurement` (SHT3X sensor data) to receive real-time system status and environmental data. Parses JSON on the **Ameba RTL8721F** microcontroller and drives an **ST7262 TFT** (default, 800×480) or **DBL070 TFT** (opt-in) color screen via **LVGL 9.3** with a real-time dashboard.
 
 The MCU acts as a pure subscriber — it only listens, never publishes.
 
 - 📄 [Chip & module information](https://aiot.realmcu.com/cn/module/index.html)
+
+---
+<div align="center">
+
+<img src="VORTEX-COBALT.jpg" width="100%" style="max-width:1365px"
+     alt="VORTEX layout in COBALT theme — CPU-centered HUD with particle animation">
+
+</div>
 
 ---
 
@@ -32,6 +57,35 @@ The MCU acts as a pure subscriber — it only listens, never publishes.
 - ✅ **Fade transition animation** — smooth 200ms opacity crossfade on layout/theme switch.
 - ✅ **Configurable flash threshold system** — card borders and progress bars blink when values exceed warning levels.
 
+---
+
+### 🏗️ Project Structure
+
+```
+.
+├── app_example/
+│   ├── app_main.c              # Entry point, thread creation
+│   ├── pc_dashboard.c/h   # MQTT client, JSON parsing, PC_Stats_t
+│   ├── pc_dashboard_ui.c/h     # UI lifecycle, timer callbacks
+│   ├── pc_dashboard_layout.c/h # V3 layout system (TRIAD/VORTEX/PULSE)
+│   ├── pc_dashboard_theme.c/h  # Color themes (COBALT/INFERNO/SILICON)
+│   ├── gpio_control.c/h        # GPIO button ISR → deferred switch
+│   ├── WiFi_reconnect.c/h # Wi-Fi auto-connect
+│   ├── threshold_config.h      # Warning flash thresholds
+│   ├── sdk_compat.h            # SDK version compatibility
+│   ├── lv_conf_project.h       # LVGL configuration override
+│   ├── drv/lcd/                # LCD drivers (ST7262, DBL070, LCDC core)
+│   ├── img_icons/              # 22 LVGL icon assets (C arrays)
+│   ├── img_bg/                 # 3 theme background images
+│   ├── scripts/                # PNG→LVGL conversion scripts
+├── PC/                         # PC-side Python collector
+├── env.sh                      # Linux/macOS environment setup
+├── env.ps1                     # Windows PowerShell environment setup
+├── env.bat                     # Windows cmd environment setup
+├── CMakeLists.txt              # Top-level CMake
+├── prj.conf                    # SDK Kconfig
+└── Kconfig                     # SDK config reference
+```
 ---
 
 ### 🧠 How It Works
@@ -123,7 +177,7 @@ Edit `app_example/pc_dashboard.h`:
 
 ```c
 #define MQTT_BROKER_ADDRESS     "your-broker.emqxsl.cn"
-#define MQTT_CLIENT_ID          "PC_DASHBOARD_001"
+#define MQTT_CLIENT_ID          "PC_DASHBOARD_MCU_1_COM19"  /* auto-selected by USE_DBL070 flag */
 #define MQTT_USERNAME           "your-username"
 #define MQTT_PASSWORD           "your-password"
 ```
@@ -148,8 +202,8 @@ Edit `app_example/threshold_config.h` to adjust when cards flash:
 | `ram_pct` | 80.0% | RAM usage threshold |
 | `disk_pct` | 90.0% | Disk usage threshold |
 | `gpu_pct` | 80.0% | GPU usage threshold |
-| `bat_low_pct` | 90.0% | Battery low threshold (debug value) |
-| `env_temp_c` | 28.0°C | Environmental temperature threshold |
+| `bat_low_pct` | 20.0% | Battery low threshold |
+| `env_temp_c` | 35.0°C | Environmental temperature threshold |
 | `flash_interval_ms` | 150ms | Flash blink interval |
 
 ---
@@ -298,30 +352,3 @@ The MCU parses these flat keys directly using `strstr()` — no external JSON li
 | `threshold_config.h` | Flash warning thresholds for all monitored metrics. |
 | `sdk_compat.h` | SDK version compatibility macros (`COMPAT_CHECK_CONNECTIVITY` / `COMPAT_REQUEST_IP`).
 
-### Project Structure
-
-```
-.
-├── app_example/
-│   ├── app_main.c              # Entry point, thread creation
-│   ├── pc_dashboard.c/h   # MQTT client, JSON parsing, PC_Stats_t
-│   ├── pc_dashboard_ui.c/h     # UI lifecycle, timer callbacks
-│   ├── pc_dashboard_layout.c/h # V3 layout system (TRIAD/VORTEX/PULSE)
-│   ├── pc_dashboard_theme.c/h  # Color themes (COBALT/INFERNO/SILICON)
-│   ├── gpio_control.c/h        # GPIO button ISR → deferred switch
-│   ├── WiFi_reconnect.c/h # Wi-Fi auto-connect
-│   ├── threshold_config.h      # Warning flash thresholds
-│   ├── sdk_compat.h            # SDK version compatibility
-│   ├── lv_conf_project.h       # LVGL configuration override
-│   ├── drv/lcd/                # LCD drivers (ST7262, DBL070, LCDC core)
-│   ├── img_icons/              # 22 LVGL icon assets (C arrays)
-│   ├── img_bg/                 # 3 theme background images
-│   ├── scripts/                # PNG→LVGL conversion scripts
-├── PC/                         # PC-side Python collector
-├── env.sh                      # Linux/macOS environment setup
-├── env.ps1                     # Windows PowerShell environment setup
-├── env.bat                     # Windows cmd environment setup
-├── CMakeLists.txt              # Top-level CMake
-├── prj.conf                    # SDK Kconfig
-└── Kconfig                     # SDK config reference
-```
