@@ -2,4 +2,5 @@ paho-mqtt>=2.1.0
 psutil>=7.2.2
 pyserial>=3.5
 pywin32>=312;  sys_platform == 'win32'
+pythonnet>=3.0.0;  sys_platform == 'win32'
 WMI>=1.5.1;  sys_platform == 'win32'

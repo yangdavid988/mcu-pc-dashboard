@@ -55,6 +55,8 @@ The MCU acts as a pure subscriber — it only listens, never publishes.
 - ✅ **3 dashboard layouts** — switch via GPIO button (circular: TRIAD → VORTEX → PULSE).
 - ✅ **3 color themes** — switch via GPIO button (COBALT blue / INFERNO red / SILICON silver).
 - ✅ **Fade transition animation** — smooth 200ms opacity crossfade on layout/theme switch.
+- ✅ **Lock screen standby mode** — displays an analogue clock when the PC is locked (auto-detected), transitions back to monitor view on unlock.
+- ✅ **PC event channel** — subscribes to `pc/event` for lock/unlock events published by the PC collector.
 - ✅ **Configurable flash threshold system** — card borders and progress bars blink when values exceed warning levels.
 
 ---
@@ -283,45 +285,64 @@ SHT3X updated: 24.5 C, 48.2 %
 
 A Python script (`PC/pc_to_emqx.py`) that collects local PC hardware statistics and publishes them to the MQTT broker.
 
+#### Key Features
+
+- **Hardware monitoring** — CPU, RAM, disk, GPU, network, battery, swap, disk I/O
+- **Libre Hardware Monitor (LHM) integration** — on Windows, uses `pythonnet` to load `LibreHardwareMonitorLib.dll` for comprehensive sensor data (CPU Package/Core temps, fan speeds, voltages, power draw). Falls back to `nvidia-smi` / `wmic` if LHM is unavailable.
+- **Lock screen detection** — detects Windows (LogonUI.exe) and Linux (dbus logind) lock events and publishes to `pc/event` topic so the MCU can enter standby/clock mode.
+- **LHM GPU backfill** — fills GPU usage/memory/temperature for non-NVIDIA GPUs (Intel/AMD) from LHM sensor data.
+
 #### Collected Metrics
 
 | Metric | Data Source | MQTT Key |
 |--------|-------------|----------|
-| CPU usage (%) | `psutil.cpu_percent()` | `pc/cpu/pct` |
-| CPU temperature (°C) | `psutil.sensors_temperatures()` | `pc/cpu/temp_c` |
-| CPU frequency (MHz) | `psutil.cpu_freq()` | `pc/cpu/freq_cur`, `freq_min`, `freq_max` |
-| RAM usage/percent | `psutil.virtual_memory()` | `pc/ram/used`, `pc/ram/pct` |
-| Disk usage/percent | `psutil.disk_usage()` | `pc/disk/used`, `pc/disk/pct` |
-| GPU usage/memory/temp | `nvidia-smi` (subprocess) | `pc/gpu/...` |
-| Network speed | `psutil.net_io_counters()` (delta calc) | `pc/net/sent_kbps`, `pc/net/recv_kbps` |
-| Disk I/O | `psutil.disk_io_counters()` | `pc/disk_io/...` |
-| Swap usage | `psutil.swap_memory()` | `pc/swap/used`, `pc/swap/pct` |
-| Battery | `psutil.sensors_battery()` | `pc/bat/pct`, `pc/bat/power_plugged` |
-| System info | `platform.*`, `psutil.*` | `pc/sys/...` |
+| CPU usage (%) | `psutil.cpu_percent()` | `cpu` |
+| CPU temperature (°C) | LHM / `psutil.sensors_temperatures()` | `cpu_temp` |
+| CPU frequency (MHz) | `psutil.cpu_freq()` | `cpu_freq_*` |
+| RAM usage/percent | `psutil.virtual_memory()` | `mem`, `mem_total`, `mem_used` |
+| Disk usage/percent | `psutil.disk_usage()` | `disk` |
+| GPU usage/memory/temp | LHM / `nvidia-smi` / `wmic` | `gpu_*` |
+| Network speed | `psutil.net_io_counters()` (delta) | `net_*_kbps` |
+| Disk I/O utilization | `psutil.disk_io_counters()` | `disk_io_percent` |
+| Disk read/write | `psutil.disk_io_counters()` | `disk_read_bytes`, `disk_write_bytes` |
+| Swap usage | `psutil.swap_memory()` | `swap_*` |
+| Battery | `psutil.sensors_battery()` | `battery_*` |
+| System info | `platform.*`, `socket.gethostname()` | `hostname`, `os_platform` |
+| Lock screen event | Process/dbus check | `pc/event` (separate topic) |
 
 #### Auto-Venv Feature
 
-The script automatically creates and uses a Python virtual environment named `venv_mqtt`:
+The script automatically runs inside a `.venv` virtual environment:
 
-- On first run, it creates `./venv_mqtt/` and installs dependencies from `requirements.txt`.
-- On subsequent runs, it reuses the existing venv — no manual `venv activate` needed.
-- To force reinstall, delete the `venv_mqtt/` folder and re-run.
+- On start, checks if already inside a venv; if not, re-executes via `.venv/Scripts/python` (Windows) or `.venv/bin/python` (Linux/macOS).
+- To set up: `python -m venv .venv && pip install -r PC/requirements.txt`
 
 #### Requirements
 
 - Python 3.7+
 - `psutil` — system stats collection
 - `paho-mqtt` — MQTT publishing
+- `pythonnet` (Windows) — LHM DLL integration
+- `WMI` (Windows) — WMI-based GPU detection
 
-Install manually: `pip install -r PC/requirements.txt`
+Install: `pip install -r PC/requirements.txt`
 
 #### GPU Support
 
-GPU monitoring queries `nvidia-smi` via subprocess. Non-NVIDIA GPUs will log a warning. GPU monitoring failures are non-fatal — other metrics continue normally.
+GPU monitoring uses a three-tier fallback: `nvidia-smi` (NVIDIA) → WMI `Win32_VideoController` (Intel/AMD) → `wmic` CLI. LHM data is used to backfill usage/memory/temperature for non-NVIDIA GPUs. GPU failures are non-fatal — other metrics continue normally.
 
-#### MQTT Topic
+#### Libre Hardware Monitor (Windows)
 
-Publishes to topic `pc/stats` as a flat JSON object. Example:
+For comprehensive sensor data (CPU Package temp, fan speeds, voltages, power), install [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) (portable, no installation needed). The script auto-detects the DLL from the default Downloads path or a running LHM process.
+
+#### MQTT Topics
+
+| Topic | Direction | Payload | Interval |
+|-------|-----------|---------|----------|
+| `pc/stats` | Publish | Flat JSON of all metrics | Every 3s |
+| `pc/event` | Publish | `{"event": "lock"}` or `{"event": "unlock"}` | On lock state change (retained) |
+
+The `pc/stats` topic publishes a flat JSON object. Example:
 
 ```json
 {
