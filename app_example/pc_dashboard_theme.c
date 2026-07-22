@@ -263,12 +263,23 @@ static void start_fade_out(void)
     switch_ready_cb(NULL);
 }
 
+void theme_watermark_show(bool show)
+{
+    if (g_bg_watermark == NULL) return;
+    /* Use HIDDEN flag so the watermark is skipped in LVGL rendering
+     * (bg_opa=0 alone does NOT suppress bg_image rendering in LVGL 9.3). */
+    if (show)
+        lv_obj_remove_flag(g_bg_watermark, LV_OBJ_FLAG_HIDDEN);
+    else
+        lv_obj_add_flag(g_bg_watermark, LV_OBJ_FLAG_HIDDEN);
+}
+
 void layout_switch(layout_id_t layout)
 {
     if (g_switching) return;    /* Animation in progress, ignore */
     g_switching = true;
     s_pending_layout = layout;
-    s_pending_theme  = THEME_MAX;
+    s_pending_theme = THEME_MAX;
     RTK_LOGI(TAG, "layout_switch -> %s\n", layout_get_name(layout));
     start_fade_out();
 }
@@ -277,7 +288,7 @@ void theme_switch(theme_id_t theme)
 {
     if (g_switching) return;
     g_switching = true;
-    s_pending_theme  = theme;
+    s_pending_theme = theme;
     s_pending_layout = LAYOUT_MAX;
     RTK_LOGI(TAG, "theme_switch -> %s\n", theme_get_name(theme));
     start_fade_out();

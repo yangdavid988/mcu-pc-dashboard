@@ -1666,31 +1666,31 @@ void create_layout_vortex(lv_obj_t* parent)
             lv_obj_set_style_text_font(gpu_title, &lv_font_montserrat_16, 0);
             lv_obj_set_pos(gpu_title, 44, 16);
 
-            lv_obj_t* name = lv_label_create(card);
-            vo_gpu_name = name;
-            lv_label_set_text(name, "");
-            lv_obj_set_style_text_color(name, lv_color_make(0xAA, 0xAA, 0xCC), 0);
-            lv_obj_set_style_text_font(name, &lv_font_montserrat_14, 0);
-            lv_obj_set_pos(name, 8, 44);
-
             lv_obj_t* val = lv_label_create(card);
             vo_gpu_val = val;
             lv_label_set_text(val, "");
             lv_obj_set_style_text_color(val, accent, 0);
             lv_obj_set_style_text_font(val, &lv_font_montserrat_18, 0);
-            lv_obj_align(val, LV_ALIGN_TOP_RIGHT, -8, 28);
+            lv_obj_align(val, LV_ALIGN_TOP_RIGHT, -8, 10);
 
             lv_obj_t* bar = create_glow_bar(card, bw, bh,
                 lv_color_make(0x22, 0x22, 0x35), accent);
             vo_gpu_bar = bar;
-            lv_obj_set_pos(bar, 5, 54);
+            lv_obj_set_pos(bar, 5, 42);
+
+            lv_obj_t* name = lv_label_create(card);
+            vo_gpu_name = name;
+            lv_label_set_text(name, "");
+            lv_obj_set_style_text_color(name, lv_color_make(0xAA, 0xAA, 0xCC), 0);
+            lv_obj_set_style_text_font(name, &lv_font_montserrat_14, 0);
+            lv_obj_set_pos(name, 8, 62);
 
             lv_obj_t* temp_mem = lv_label_create(card);
             vo_gpu_tm = temp_mem;
             lv_label_set_text(temp_mem, "");
             lv_obj_set_style_text_color(temp_mem, lv_color_make(0xAA, 0xAA, 0xCC), 0);
             lv_obj_set_style_text_font(temp_mem, &lv_font_montserrat_14, 0);
-            lv_obj_set_pos(temp_mem, 8, 78);
+            lv_obj_set_pos(temp_mem, 8, 84);
         }
     }
 
@@ -3970,6 +3970,7 @@ void update_layout_pulse(void)
 /* ========================================================================
  * V3 update dispatch — called by update_dashboard_ui()
  * ======================================================================== */
+extern volatile bool g_sht3x_pending;
 void update_current_layout(void)
 {
     PC_Stats_t stats;
@@ -4011,7 +4012,8 @@ void update_current_layout(void)
         strcmp(stats.current_user, s_prev.current_user) != 0 ||
         strcmp(stats.hostname, s_prev.hostname) != 0 ||
         strcmp(stats.os_platform, s_prev.os_platform) != 0 ||
-        strcmp(stats.gpu_name, s_prev.gpu_name) != 0;
+        strcmp(stats.gpu_name, s_prev.gpu_name) != 0 ||
+        g_sht3x_pending;                             /* SHT3X pending env-bar update */
 
     if (!changed)
         return;
@@ -4034,6 +4036,7 @@ void update_current_layout(void)
     default:
         break;
     }
+    g_sht3x_pending = false;   /* env bar updated by layout refresh */
 }
 
 /* ========================================================================

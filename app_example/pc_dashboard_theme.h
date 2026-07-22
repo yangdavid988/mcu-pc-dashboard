@@ -85,6 +85,7 @@ void theme_switch(theme_id_t theme);
 void layout_switch(layout_id_t layout);
 const char *theme_get_name(theme_id_t id);
 const char *layout_get_name(layout_id_t id);
+void theme_watermark_show(bool show);
 
 #ifdef __cplusplus
 }

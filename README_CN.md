@@ -55,6 +55,8 @@ MCU 仅作为订阅者 — 只接收数据，不发布任何消息。
 - ✅ **3 种仪表盘布局** — 通过 GPIO 按键循环切换（TRIAD → VORTEX → PULSE）。
 - ✅ **3 种颜色主题** — 通过 GPIO 按键循环切换（COBALT 蓝色 / INFERNO 红色 / SILICON 银色）。
 - ✅ **淡入淡出动画** — 布局/主题切换时 200ms 透明度过渡。
+- ✅ **锁屏待机模式** — PC 锁屏时自动切换为模拟时钟显示，解锁后恢复监控面板。
+- ✅ **PC 事件通道** — 订阅 `pc/event` 主题，接收 PC 采集器发布的锁屏/解锁事件。
 - ✅ **可配置阈值闪烁系统** — 当指标超过告警级别时，卡片边框和进度条闪烁提醒。
 
 ---
@@ -282,43 +284,62 @@ SHT3X updated: 24.5 C, 48.2 %
 
 Python 脚本（`PC/pc_to_emqx.py`）负责采集本地 PC 硬件状态并通过 MQTT 发布。
 
+#### 主要功能
+
+- **硬件监控** — CPU、内存、磁盘、GPU、网络、电池、Swap、磁盘 I/O
+- **Libre Hardware Monitor（LHM）集成** — Windows 下通过 `pythonnet` 加载 `LibreHardwareMonitorLib.dll`，获取全面的传感器数据（CPU Package/核心温度、风扇转速、电压、功耗）。若 LHM 不可用则回退到 `nvidia-smi` / `wmic`。
+- **锁屏检测** — 检测 Windows（LogonUI.exe）和 Linux（dbus logind）锁屏事件，通过 `pc/event` 主题发布，使 MCU 进入待机时钟模式。
+- **LHM GPU 回填** — 为非 NVIDIA 显卡（Intel/AMD）补充 GPU 使用率、显存用量和温度数据。
+
 #### 采集指标
 
 | 指标 | 数据来源 | MQTT Key |
 |------|----------|----------|
-| CPU 使用率 (%) | `psutil.cpu_percent()` | `pc/cpu/pct` |
-| CPU 温度 (°C) | `psutil.sensors_temperatures()` | `pc/cpu/temp_c` |
-| CPU 频率 (MHz) | `psutil.cpu_freq()` | `pc/cpu/freq_cur`, `freq_min`, `freq_max` |
-| 内存用量/百分比 | `psutil.virtual_memory()` | `pc/ram/used`, `pc/ram/pct` |
-| 磁盘用量/百分比 | `psutil.disk_usage()` | `pc/disk/used`, `pc/disk/pct` |
-| GPU 用量/显存/温度 | `nvidia-smi`（子进程） | `pc/gpu/...` |
-| 网络速度 | `psutil.net_io_counters()`（差值计算） | `pc/net/sent_kbps`, `pc/net/recv_kbps` |
-| 磁盘 I/O | `psutil.disk_io_counters()` | `pc/disk_io/...` |
-| 交换分区（Swap） | `psutil.swap_memory()` | `pc/swap/used`, `pc/swap/pct` |
-| 电池 | `psutil.sensors_battery()` | `pc/bat/pct`, `pc/bat/power_plugged` |
-| 系统信息 | `platform.*`, `psutil.*` | `pc/sys/...` |
+| CPU 使用率 (%) | `psutil.cpu_percent()` | `cpu` |
+| CPU 温度 (°C) | LHM / `psutil.sensors_temperatures()` | `cpu_temp` |
+| CPU 频率 (MHz) | `psutil.cpu_freq()` | `cpu_freq_*` |
+| 内存用量/百分比 | `psutil.virtual_memory()` | `mem`, `mem_total`, `mem_used` |
+| 磁盘用量/百分比 | `psutil.disk_usage()` | `disk` |
+| GPU 用量/显存/温度 | LHM / `nvidia-smi` / `wmic` | `gpu_*` |
+| 网络速度 | `psutil.net_io_counters()`（差值） | `net_*_kbps` |
+| 磁盘 I/O 利用率 | `psutil.disk_io_counters()` | `disk_io_percent` |
+| 磁盘读写总量 | `psutil.disk_io_counters()` | `disk_read_bytes`, `disk_write_bytes` |
+| Swap 用量 | `psutil.swap_memory()` | `swap_*` |
+| 电池 | `psutil.sensors_battery()` | `battery_*` |
+| 系统信息 | `platform.*`, `socket.gethostname()` | `hostname`, `os_platform` |
+| 锁屏事件 | 进程/dbus 检测 | `pc/event`（独立主题） |
 
 #### 自动虚拟环境（Auto-Venv）
 
-脚本启动时会自动创建并使用名为 `venv_mqtt` 的 Python 虚拟环境：
+脚本启动时会自动在 `.venv` 虚拟环境中运行：
 
-- 首次运行时自动创建 `./venv_mqtt/` 并从 `requirements.txt` 安装依赖。
-- 后续运行直接复用已有环境，无需手动执行 `venv activate`。
-- 如需重新安装，删除 `venv_mqtt/` 目录后重新启动即可。
+- 启动时检测是否已在虚拟环境中；如不在，通过 `.venv/Scripts/python`（Windows）或 `.venv/bin/python`（Linux/macOS）重新执行。
+- 初始化方式：`python -m venv .venv && pip install -r PC/requirements.txt`
 
 #### 依赖
 
 - Python 3.7+
 - `psutil` — 系统状态采集
 - `paho-mqtt` — MQTT 客户端
+- `pythonnet`（Windows）— LHM DLL 集成
+- `WMI`（Windows）— WMI GPU 检测
 
-手动安装：`pip install -r PC/requirements.txt`
+安装：`pip install -r PC/requirements.txt`
 
 #### GPU 支持
 
-GPU 监控通过子进程调用 `nvidia-smi` 实现。非 NVIDIA 显卡会记录警告信息。GPU 监控失败不影响其他指标的采集。
+GPU 监控使用三级回退策略：`nvidia-smi`（NVIDIA）→ WMI `Win32_VideoController`（Intel/AMD）→ `wmic` CLI。LHM 数据用于为非 NVIDIA 显卡补充 GPU 使用率、显存和温度。GPU 监控失败不影响其他指标采集。
+
+#### Libre Hardware Monitor（Windows）
+
+如需全面的传感器数据（CPU Package 温度、风扇转速、电压、功耗），请安装 [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)（便携版，无需安装）。脚本会自动从默认下载路径或运行中的 LHM 进程查找 DLL。
 
 #### MQTT 主题
+
+| 主题 | 方向 | 载荷 | 间隔 |
+|------|------|------|------|
+| `pc/stats` | 发布 | 所有指标的平面 JSON | 每 3 秒 |
+| `pc/event` | 发布 | `{"event": "lock"}` 或 `{"event": "unlock"}` | 锁屏状态变化时（retained） |
 
 脚本向 `pc/stats` 主题发布平面 JSON 数据。示例：
 

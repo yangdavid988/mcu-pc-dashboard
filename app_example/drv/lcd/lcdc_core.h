@@ -2,6 +2,7 @@
 #define LCDC_CORE_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 /* ========================================================================
  * Image format enumeration
@@ -53,6 +54,9 @@ void lcdc_core_flush_buffer(uint8_t *buffer);
 /* Get resolution */
 void lcdc_core_get_info(int *width, int *height);
 
+/* Get PSRAM-section-allocated framebuffer base address */
+uint32_t lcdc_core_get_fb_base(void);
+
 /* Register VBlank callback */
 void lcdc_core_register_vblank(void (*cb)(void *), void *data);
 
@@ -69,39 +73,45 @@ void lcdc_core_flush_now(uint32_t fb_addr);
  * Double-buffer page flip API
  * ======================================================================== */
 
-/* Set pending flip frame buffer address (DMA switch executed in VBlank ISR) */
-void lcdc_core_set_pending_flip(uint32_t fb_addr, void *context);
+/* Record a completed render — DCache_Clean, defers pending flip to flush_commit */
+void lcdc_core_record_flush(uint32_t fb_addr, void *context);
+
+/* Commit the recorded flush — set pending flip for LINE ISR to consume.
+ * Call after lv_timer_handler() or lv_refr_now() completes.            */
+void lcdc_core_flush_commit(void);
 
 /* Register flip-done callback (called after DMA switch in VBlank ISR) */
 void lcdc_core_register_flip_done(void (*cb)(void *));
 
 /* ========================================================================
- * Debug API (for diagnostic tearing issues)
- * ======================================================================== */
-
-/* Record one flush_cb call (called by lcd_drv.c, stats flush->flip latency) */
-void lcdc_core_debug_flush_called(void);
-
-/* ========================================================================
- * Diagnostic getters (always-on, for cross-task freeze detection)
+ * Diagnostic getters (for cross-task freeze detection)
  * ======================================================================== */
 
 /* Returns last FRD (frame-done) ISR tick in ms */
 uint32_t lcdc_core_get_last_frd_tick(void);
 
-/* Returns last LINE ISR tick in ms */
+/* Returns last LINE ISR tick in ms (for stall detection) */
 uint32_t lcdc_core_get_last_line_tick(void);
-
-/* Returns last flip (pending consumed by LINE) tick in ms */
-uint32_t lcdc_core_get_last_flip_tick(void);
 
 /* Returns FRD interrupt count (number of frames completed) */
 uint32_t lcdc_core_get_frd_count(void);
+
+/* Returns number of flush_cb calls */
+uint32_t lcdc_core_get_flush_count(void);
+
+/* Record one flush_cb call (called by lcd_drv.c flush callback) */
+void lcdc_core_count_flush(void);
 
 /* Returns number of page flips (LINE consumed pending_flip) */
 uint32_t lcdc_core_get_flip_count(void);
 
 /* Returns pend_overwrite count */
 uint32_t lcdc_core_get_pend_overwrite(void);
+
+/* Returns true if a flush_commit() was called but LINE ISR hasn't consumed
+ * the pending flip yet.  Used by the main-loop frame gate to pace rendering
+ * to the display's vertical refresh rate — preventing flush_commit from
+ * overwriting an unconsumed pending flip (which would drop a frame).        */
+bool lcdc_core_is_flip_pending(void);
 
 #endif /* LCDC_CORE_H */

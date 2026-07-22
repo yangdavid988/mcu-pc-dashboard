@@ -1,6 +1,7 @@
 #include "pc_dashboard_ui.h"
 #include "pc_dashboard_layout.h"
 #include "pc_dashboard_theme.h"
+#include "pc_dashboard_lock_screen.h"
 #include "gpio_control.h"
 #include "drv/lcd/lcdc_core.h"
 #include <math.h>
@@ -241,48 +242,100 @@ void create_dashboard_ui(void)
  * Refresh UI data
  * ======================================================================== */
 
-void __attribute__((unused)) dashboard_timer_cb(lv_timer_t* timer)
+void dashboard_timer_cb(lv_timer_t* timer)
 {
     LV_UNUSED(timer);
 
-    /* UI timer alive (~1 per 5s) */
+    /* ==================================================================
+     * Lock screen state machine -- MUST come before layout-dependent calls
+     * to avoid accessing dangling widget pointers after destroy.
+     * ================================================================== */
+
+    /* Transition: MONITOR → CLOCK */
+    if (g_screen_state == SCREEN_STATE_CLOCK && !g_lock_screen_active)
     {
-        static uint32_t s_diag_ui_tick = 0;
-        static uint32_t s_diag_ui_cnt = 0;
-        uint32_t _now = rtos_time_get_current_system_time_ms();
-        if (_now - s_diag_ui_tick >= 5000)
+        RTK_LOGI("V3_UI", "lock event -> switching to clock standby\n");
+        bool use_theme_bg = layout_is_created() &&
+            (lv_obj_get_style_bg_image_src(lv_scr_act(), 0) != NULL);
+
+        if (use_theme_bg)
         {
-            s_diag_ui_tick = _now;
-#if defined(CONFIG_DIAG_HEARTBEAT)
-            RTK_LOGI("V3_UI", "DIAG: ui cnt=%lu\n", (unsigned long)s_diag_ui_cnt);
-#endif
+            const theme_t* t = &g_themes[g_theme_id];
+            lv_obj_set_style_bg_color(lv_scr_act(), t->bg_top, 0);
+            lv_obj_set_style_bg_grad_color(lv_scr_act(), t->bg_bot, 0);
+            lv_obj_set_style_bg_grad_dir(lv_scr_act(), LV_GRAD_DIR_VER, 0);
         }
-        s_diag_ui_cnt++;
+        else
+        {
+            lv_obj_set_style_bg_color(lv_scr_act(), lv_color_black(), 0);
+            lv_obj_set_style_bg_grad_dir(lv_scr_act(), LV_GRAD_DIR_NONE, 0);
+            lv_obj_set_style_bg_image_src(lv_scr_act(), NULL, 0);
+        }
+        destroy_current_layout();
+        destroy_waiting_ui();
+        reset_mqtt_status_tracking();
+        create_lock_screen_clock();
+        g_lock_screen_active = true;
+        return;
     }
 
-    update_clock_display();
-    update_layout_clock();
-    update_mqtt_warning();
+    /* Transition: CLOCK → MONITOR (fade-out transition) */
+    if (g_screen_state == SCREEN_STATE_MONITOR && g_lock_screen_active)
+    {
+        RTK_LOGI("V3_UI", "unlock event -> fade transition to monitor\n");
+        reset_mqtt_status_tracking();
+        notify_layout_switched();
+        destroy_waiting_ui();
+        layout_switch(g_layout_id);
+        start_unlock_transition();
+        return;
+    }
+
+    /* Stay in CLOCK mode -- just update the clock, skip layout-dependent calls */
+    if (g_lock_screen_active)
+    {
+        update_lock_screen_clock();
+        return;
+    }
+
+    /* ==================================================================
+     * Normal MONITOR mode.
+     * ================================================================== */
+    if (layout_is_created())
+    {
+        update_clock_display();
+        update_layout_clock();
+        update_mqtt_warning();
+    }
 
     /* Process deferred GPIO switch requests (ISR-safe: only sets flags) */
     gpio_control_process();
 
-    /* Auto-transition from waiting screen after ~5 seconds even without MQTT data */
+    /* Auto-transition from waiting screen after ~5 seconds even without MQTT data.
+     *
+     * Initial-state guard: if pc/event retained msg hasn't arrived yet, delay
+     * auto-create to avoid briefly showing MONITOR then flashing to CLOCK
+     * when the MCU booted while the PC was locked. Fallback after 15s to
+     * handle the case where no PC script is running at all. */
     if (!layout_is_created())
     {
         static int wait_ticks = 0;
-        if (++wait_ticks >= 5)
+        wait_ticks++;
+
+        /* Keep waiting for retained pc/event (up to 15s) before deciding */
+        if (!g_pc_event_received && wait_ticks < 15)
+        {
+            return;
+        }
+
+        /* Timeout reached with or without pc-event: create layout */
+        if (wait_ticks >= 5)
         {
             RTK_LOGI("V3_UI", "timeout -> create layout %s (no data)\n",
                 layout_get_name(g_layout_id));
+            wait_ticks = 0;
             destroy_waiting_ui();
             layout_switch(g_layout_id);
-            wait_ticks = 0;
-            /* Fall through to update_current_layout with current (reset) data */
-        }
-        else
-        {
-            return;  /* Still waiting */
         }
     }
 
