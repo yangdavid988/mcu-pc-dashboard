@@ -24,6 +24,35 @@
 #define WIDTH                       800
 #define HEIGHT                      480
 #define LCDC_LINE_NUM_INTR_DEF      (HEIGHT * 5 / 6)   /* line 400 */
+#define FB_BUF_SIZE                 (WIDTH * HEIGHT * 4)/* 1,536,000 bytes per buffer */
+
+  /* ========================================================================
+   * PSRAM static framebuffer allocation (section attribute)
+   *
+   * The LVGL double-buffer is placed in the .psram_heap.start section
+   * (KM4TZ_BD_PSRAM, NOLOAD) which is the only NOLOAD section that maps
+   * to the linker-managed PSRAM region.  This achieves two goals without
+   * modifying the SDK linker script:
+   *
+   * 1. The linker reserves the space — __psram_heap_buffer_start__
+   *    advances past the arrays, so even if a future runtime enables a
+   *    PSRAM heap (currently __psram_heap_buffer_size__ = 0), the heap
+   *    cannot overlap with framebuffer memory.
+   *
+   * 2. NOLOAD prevents flash-image bloat (BSS-like zero-fill at boot).
+   *
+   * The actual framebuffer base address is read via lcdc_core_get_fb_base()
+   * at runtime, replacing the old hardcoded cfg->fb_base.  LCDC DMA,
+   * LVGL registration, and buffer flush all use this dynamic address.
+   * ======================================================================== */
+__attribute__((section(".psram_heap.start")))
+__attribute__((aligned(64)))
+static volatile uint8_t s_lvgl_fb_pool[FB_BUF_SIZE * 2];  /* 2 × 1.5 MB = 3 MB */
+
+uint32_t lcdc_core_get_fb_base(void)
+{
+    return (uint32_t)s_lvgl_fb_pool;
+}
 
    /* ========================================================================
     * Internal state
@@ -47,13 +76,18 @@ static struct {
 static void (* volatile g_vblank_cb)(void*) = NULL;
 static void* volatile g_data = NULL;
 
-/* Double-buffer page flip: frame buffer address to switch on VBlank */
+/* Stage 1: recorded by flush_cb (DCache_Clean done, no pendig flip) */
+static volatile uint32_t g_pending_flush_fb = 0;
+static void* volatile g_pending_flush_ctx = NULL;
+
+/* Stage 2: committed pending flip — consumed by LINE ISR @ row 400 */
 static volatile uint32_t g_pending_flip_fb = 0;
 static void* volatile g_pending_context = NULL;
+
+/* flip_done callback (registered by lcd_drv.c) */
 static void (* volatile g_flip_done_cb)(void*) = NULL;
 
-/* After LINE flips DMA, defer flip_done_cb to FRD,
- * preventing LVGL from writing to the buffer DMA is reading ~3ms before VBlank -> tearing */
+/* Deferred flip_done_cb: LINE ISR sets this, FRD ISR consumes it */
 static void* volatile g_flip_done_deferred_ctx = NULL;
 
 /* ========================================================================
@@ -201,7 +235,8 @@ static void lcdc_irq_handler(void)
 
                 /* Periodic LCDC debug log (every ~60 flips, ~1s at 60fps) */
                 if (g_dbg.log_countdown) { g_dbg.log_countdown--; }
-                if (g_dbg.log_countdown == 0) {
+                if (g_dbg.log_countdown == 0)
+                {
                     lcdc_debug_log();
                     g_dbg.log_countdown = 60;
                 }
@@ -278,28 +313,27 @@ static void lcdc_driver_init(const lcdc_screen_cfg_t* cfg)
 
     /* Set initial DMA frame buffer address to buf2 (not buf1),
      * to avoid conflict between LVGL's first render to buf1 and LCDC scan.
-     * On first VBlank, pending_flip(buf1) will switch DMA to buf1. */
-    LCDC_DMAImgCfg(LCDC, (u32)cfg->fb_base + WIDTH * HEIGHT * 4);
-    LCDC_ShadowReloadConfig(LCDC);
+     * On first VBlank, pending_flip(buf1) will switch DMA to buf1.
+     * NB: use lcdc_core_get_fb_base() — not cfg->fb_base — because the
+     * buffers are now allocated via section attribute in .psram_heap.start. */
+    {
+        uint32_t _fb = lcdc_core_get_fb_base();
+        LCDC_DMAImgCfg(LCDC, _fb + FB_BUF_SIZE);
+        LCDC_ShadowReloadConfig(LCDC);
 
-    memset((void*)cfg->fb_base, 0, WIDTH * HEIGHT * 4 * 2);
-    DCache_Clean((u32)cfg->fb_base, WIDTH * HEIGHT * 4 * 2);
-
-    InterruptRegister((IRQ_FUN)lcdc_irq_handler,
-                      gLcdcIrqInfo.IrqNum,
-                      (u32)gLcdcIrqInfo.IrqData,
-                      gLcdcIrqInfo.IrqPriority);
-    InterruptEn(gLcdcIrqInfo.IrqNum, gLcdcIrqInfo.IrqPriority);
+        memset((void*)_fb, 0, FB_BUF_SIZE * 2);
+        DCache_Clean(_fb, FB_BUF_SIZE * 2);
+    }
 
     LCDC_LineINTPosConfig(LCDC, LCDC_LINE_NUM_INTR_DEF);
     LCDC_INTConfig(LCDC,
-                   LCDC_BIT_LCD_FRD_INTEN |
-                   LCDC_BIT_DMA_UN_INTEN |
-                   LCDC_BIT_LCD_LIN_INTEN,
-                   ENABLE);
+        LCDC_BIT_LCD_FRD_INTEN |
+        LCDC_BIT_DMA_UN_INTEN |
+        LCDC_BIT_LCD_LIN_INTEN,
+        ENABLE);
 
     LCDC_Cmd(LCDC, ENABLE);
-}
+} /* lcdc_driver_init */
 
 /* ========================================================================
  * Public API
@@ -308,7 +342,8 @@ static void lcdc_driver_init(const lcdc_screen_cfg_t* cfg)
 void lcdc_core_init(const lcdc_screen_cfg_t* cfg)
 {
     g_cfg = cfg;
-    g_buffer = (u8*)cfg->fb_base;
+    /* Use section-attribute allocated PSRAM base, not cfg->fb_base */
+    g_buffer = (u8*)lcdc_core_get_fb_base();
 
     if (cfg->backlight_init)
     {
@@ -324,9 +359,9 @@ void lcdc_core_init(const lcdc_screen_cfg_t* cfg)
     LCDC_RccEnable();
 
     InterruptRegister((IRQ_FUN)lcdc_irq_handler,
-                      gLcdcIrqInfo.IrqNum,
-                      NULL,
-                      gLcdcIrqInfo.IrqPriority);
+        gLcdcIrqInfo.IrqNum,
+        NULL,
+        gLcdcIrqInfo.IrqPriority);
     InterruptEn(gLcdcIrqInfo.IrqNum, gLcdcIrqInfo.IrqPriority);
 
     lcdc_driver_init(cfg);
@@ -334,10 +369,10 @@ void lcdc_core_init(const lcdc_screen_cfg_t* cfg)
     /* Reconfigure IRQ events (overrides settings in lcdc_driver_init) */
     LCDC_LineINTPosConfig(LCDC, LCDC_LINE_NUM_INTR_DEF);
     LCDC_INTConfig(LCDC,
-                   LCDC_BIT_LCD_FRD_INTEN |
-                   LCDC_BIT_DMA_UN_INTEN |
-                   LCDC_BIT_LCD_LIN_INTEN,
-                   ENABLE);
+        LCDC_BIT_LCD_FRD_INTEN |
+        LCDC_BIT_DMA_UN_INTEN |
+        LCDC_BIT_LCD_LIN_INTEN,
+        ENABLE);
 
     LCDC_Cmd(LCDC, ENABLE);
 }
@@ -397,7 +432,7 @@ void lcdc_core_mark_dirty(u32 off, u32 len)
     {
         if (off + len > fb_size)
             len = fb_size - off;
-        u32 area_start = (u32)g_cfg->fb_base + off;
+        u32 area_start = lcdc_core_get_fb_base() + off;
         u32 area_end = area_start + len;
 
         if (!g_dirty_pending)
@@ -427,18 +462,32 @@ void lcdc_core_flush_now(uint32_t fb_addr)
  * Double-buffer page flip API
  * ======================================================================== */
 
-void lcdc_core_set_pending_flip(uint32_t fb_addr, void* context)
+void lcdc_core_record_flush(uint32_t fb_addr, void* context)
 {
-    /* Critical section: must write fb_addr AND context atomically w.r.t. LINE ISR.
-     * If ISR fires between the two writes, it reads new fb_addr with stale context,
-     * leading to flip_done_cb(NULL) → lv_display_flush_ready(NULL) → LVGL freeze. */
+    DCache_Clean(fb_addr, (uint32_t)WIDTH * (uint32_t)HEIGHT * 4u);
+    __DSB();
+
+    /* Record ONLY — no pending flip */
     taskENTER_CRITICAL();
-    if (g_pending_flip_fb)
+    if (g_pending_flush_fb)
+        g_dbg.pend_overwrite++;
+    g_pending_flush_fb = fb_addr;
+    g_pending_flush_ctx = context;
+    taskEXIT_CRITICAL();
+}
+
+void lcdc_core_flush_commit(void)
+{
+    taskENTER_CRITICAL();
+    if (g_pending_flush_fb)
     {
-        g_dbg.pend_overwrite++;  /* Pending flip address overwritten — previous flip wasn't processed */
+        if (g_pending_flip_fb)
+            g_dbg.pend_overwrite++;
+        g_pending_flip_fb = g_pending_flush_fb;
+        g_pending_context = g_pending_flush_ctx;
+        g_pending_flush_fb = 0;
+        g_pending_flush_ctx = NULL;
     }
-    g_pending_flip_fb = fb_addr;
-    g_pending_context = context;
     taskEXIT_CRITICAL();
 }
 
@@ -482,6 +531,11 @@ uint32_t lcdc_core_get_frd_count(void)
     return g_dbg.frd_count;
 }
 
+uint32_t lcdc_core_get_flush_count(void)
+{
+    return g_dbg.flush_count;
+}
+
 uint32_t lcdc_core_get_flip_count(void)
 {
     return g_dbg.flip_count;
@@ -490,5 +544,10 @@ uint32_t lcdc_core_get_flip_count(void)
 uint32_t lcdc_core_get_pend_overwrite(void)
 {
     return g_dbg.pend_overwrite;
+}
+
+bool lcdc_core_is_flip_pending(void)
+{
+    return g_pending_flip_fb != 0;
 }
 

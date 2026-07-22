@@ -52,6 +52,8 @@
 #define MQTT_TOPIC_SHT3X            "humiture/measurement"
 #define MQTT_SUB_TOPIC              "pc/stats"      /* Subscribe to PC stats topic */
 #define MQTT_SUB_TOPIC_SHT3X       "humiture/measurement"  /* SHT3X temperature/humidity topic */
+#define MQTT_TOPIC_PC_EVENT         "pc/event"
+#define MQTT_SUB_TOPIC_EVENT        "pc/event"
 #define MQTT_BROKER_ADDRESS         "YOUR_BROKER.emqxsl.cn"
 #define MQTT_BROKER_PORT            8883
 #ifdef USE_DBL070
@@ -68,9 +70,18 @@
 #define UI_UPDATE_INTERVAL_MS       1000             /* Clock updates every second, data refreshes only on new arrival */
 #define UTC8_OFFSET_SEC             28800            /* UTC+8 offset (8 hours) */
 
-  /* ========================================================================
-   * PC Status Data Structure
-   * ======================================================================== */
+ /* ========================================================================
+  * Screen state machine
+  * ======================================================================== */
+typedef enum
+{
+  SCREEN_STATE_MONITOR = 0,
+  SCREEN_STATE_CLOCK,
+} ScreenState_t;
+
+/* ========================================================================
+ * PC Status Data Structure
+ * ======================================================================== */
 typedef struct
 {
   /* Resource usage */
@@ -164,6 +175,11 @@ void pc_stats_reset_to_default(void);
 extern uint32_t         g_time_base_ts;
 extern uint32_t         g_time_base_ms;
 
+/* Lock screen state -- set by MQTT event handler, read by UI timer */
+extern volatile ScreenState_t g_screen_state;
+extern volatile bool          g_lock_screen_active;
+extern volatile bool          g_pc_event_received;  /* true once first pc/event retained msg is processed */
+
 /* ========================================================================
  * Function declarations
  * ======================================================================== */
@@ -182,5 +198,11 @@ void unix_to_datetime(uint32_t timestamp,
 
 /* Byte size formatter (B/KB/MB/GB/TB) */
 void format_bytes(uint64_t bytes, char* out, size_t out_size);
+
+/* Redefine mqtt_printf with MQTT_INFO threshold (suppress DEBUG, keep INFO+).
+ * MUST come after #include "MQTTClient.h" (line 14) -- clean #undef + new
+ * #define, no redefinition warning. SDK MQTTClient.c logs are suppressed
+ * at compile time via COMPIL_LOG_LEVEL=0 (set in CMake).             */
+#include "suppress_mqtt_log.h"
 
 #endif /* _PC_DASHBOARD_H_ */

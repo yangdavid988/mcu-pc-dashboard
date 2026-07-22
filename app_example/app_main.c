@@ -131,7 +131,24 @@ static void lvgl_main_thread(void* parameters)
             }
             diag_lvgl_cnt++;
 
+            /* Frame gate: wait for previous frame's pending flip to be
+             * consumed by LINE ISR before starting a new LVGL frame.
+             *
+             * Without this gate, lv_timer_handler can produce multiple
+             * frames between LINE ISR firings (~13.9ms apart).  Each
+             * subsequent flush_commit() would overwrite the unconsumed
+             * g_pending_flip_fb -- dropping the previous frame entirely.
+             * During animations (sweep, lv_bar 500ms) this causes visible
+             * jitter / tearing because the display never sees those frames.
+             *
+             * taskYIELD() lets lower-priority tasks run while waiting.   */
+            while (lcdc_core_is_flip_pending())
+            {
+                taskYIELD();
+            }
+
             uint32_t time_till_next = lv_timer_handler();
+            lcdc_core_flush_commit();
             if (time_till_next == LV_NO_TIMER_READY)
                 time_till_next = LV_DEF_REFR_PERIOD;
             rtos_time_delay_ms(time_till_next);
@@ -146,6 +163,11 @@ static void lvgl_main_thread(void* parameters)
  * ======================================================================== */
 void app_example(void)
 {
+    /* Suppress all MQTT-tagged log output (DEBUG packet traces, etc.).
+     * rtk_log_write checks per-tag threshold BEFORE calling DiagPrintf;
+     * RTK_LOG_NONE makes the check fail for every level.                */
+     //rtk_log_level_set("MQTT", RTK_LOG_NONE);
+
     RTK_LOGI(TAG, "PC Dashboard started!\r\n");
 
     /* Create LVGL UI thread (high priority for smooth refresh) */

@@ -1,7 +1,13 @@
 #include "pc_dashboard.h"
 #include "sdk_compat.h"
+#include <time.h>
 #include "threshold_config.h"
-
+/* lwIP SNTP for time sync (fallback when no PC data) */
+/* NOTE: SDK lwipopts.h already maps SNTP_UPDATE_DELAY to sntp_get_update_interval(),
+   so the interval is controlled at runtime via sntp_set_update_interval(). */
+#include "lwip/apps/sntp.h"
+   /* Realtek SNTP component (time-of-day thin wrapper, provides set_update_interval) */
+#include "sntp/sntp_api.h"
 
 /* ========================================================================
  * Global variables
@@ -20,6 +26,12 @@ volatile uint32_t g_mqtt_last_msg_tick = 0;   /* Tick when last msg was received
 static MQTTClient          g_mqtt_client;
 static rtos_task_t         g_mqtt_task_handle = NULL;
 static bool                g_sht3x_subscribed = false;   /* Whether SHT3X topic has been subscribed */
+static bool                g_pc_event_subscribed = false;  /* Lock screen event subscription */
+
+/* Lock screen state */
+volatile ScreenState_t g_screen_state = SCREEN_STATE_MONITOR;
+volatile bool          g_lock_screen_active = false;
+volatile bool          g_pc_event_received = false;  /* first pc/event retained msg processed */
 
 /* ========================================================================
  * Simple JSON value extractors (flat JSON format)
@@ -469,6 +481,37 @@ static void parse_pc_stats_json(const char* payload)
 }
 
 /* ========================================================================
+ * Lock screen event parser — topic "pc/event"
+ * Payload: {"event": "lock", "timestamp": 1234567890}
+ * ======================================================================== */
+static void parse_lock_event(const char* payload)
+{
+    char event_buf[16] = { 0 };
+    if (json_extract_string(payload, "event", event_buf, sizeof(event_buf)) < 0)
+    {
+        return;
+    }
+
+    if (strcmp(event_buf, "lock") == 0)
+    {
+        taskENTER_CRITICAL();
+        g_screen_state = SCREEN_STATE_CLOCK;
+        g_pc_event_received = true;
+        taskEXIT_CRITICAL();
+        RTK_LOGI(TAG, "Lock event received -> CLOCK mode\n");
+    }
+    else if (strcmp(event_buf, "unlock") == 0)
+    {
+        taskENTER_CRITICAL();
+        g_screen_state = SCREEN_STATE_MONITOR;
+        g_pc_event_received = true;
+        g_new_data_ready = true;
+        taskEXIT_CRITICAL();
+        RTK_LOGI(TAG, "Unlock event received -> MONITOR mode\n");
+    }
+}
+
+/* ========================================================================
  * SHT3X JSON parser
  * ======================================================================== */
 static void parse_sht3x_json(const char* payload)
@@ -567,6 +610,11 @@ static void messageArrived(MessageData* data, void* discard)
     {
         parse_sht3x_json(json_buf);
     }
+    else if (topic_len == (int)strlen(MQTT_TOPIC_PC_EVENT) &&
+        strncmp(topic, MQTT_TOPIC_PC_EVENT, topic_len) == 0)
+    {
+        parse_lock_event(json_buf);
+    }
     else
     {
         /* Silently ignore unmatched topics */
@@ -635,6 +683,13 @@ void pc_dashboard_task(void* parameters)
     }
 
     RTK_LOGI(TAG, "Wi-Fi connected.\n");
+
+    /* ---- Initialize SNTP for time sync (fallback when no PC data) ---- */
+    /* NOTE: interval controlled at runtime via SDK's sntp_get_update_interval() mapping */
+    sntp_set_update_interval(86400000);  /* re-sync every 24h (Realtek wrapper) */
+    sntp_setservername(0, "ntp.aliyun.com");
+    sntp_init();
+    RTK_LOGI(TAG, "SNTP initialized (server: ntp.aliyun.com)\n");
 
     /* Network / MQTT client initialization */
     NetworkInit(&network);
@@ -768,6 +823,53 @@ void pc_dashboard_task(void* parameters)
         else if (g_mqtt_client.mqttstatus != MQTT_RUNNING)
         {
             g_sht3x_subscribed = false;  /* Reset on disconnect for re-subscribe on reconnect */
+        }
+
+        /* Subscribe to lock screen event topic */
+        if (g_mqtt_client.mqttstatus == MQTT_RUNNING && !g_pc_event_subscribed)
+        {
+            RTK_LOGI(TAG, "Subscribing to lock event topic: %s\n",
+                MQTT_SUB_TOPIC_EVENT);
+            int sub_rc = MQTTSubscribe(&g_mqtt_client,
+                MQTT_SUB_TOPIC_EVENT,
+                QOS0,
+                messageArrived);
+
+            if (sub_rc == 0)
+            {
+                int i;
+                bool already_registered = false;
+                for (i = 0; i < MAX_MESSAGE_HANDLERS; ++i)
+                {
+                    if (g_mqtt_client.messageHandlers[i].topicFilter != NULL &&
+                        strcmp(g_mqtt_client.messageHandlers[i].topicFilter,
+                            MQTT_SUB_TOPIC_EVENT) == 0)
+                    {
+                        already_registered = true;
+                        break;
+                    }
+                }
+                if (!already_registered)
+                {
+                    for (i = 0; i < MAX_MESSAGE_HANDLERS; ++i)
+                    {
+                        if (g_mqtt_client.messageHandlers[i].topicFilter == NULL)
+                        {
+                            g_mqtt_client.messageHandlers[i].topicFilter =
+                                MQTT_SUB_TOPIC_EVENT;
+                            g_mqtt_client.messageHandlers[i].fp =
+                                messageArrived;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            g_pc_event_subscribed = true;
+        }
+        else if (g_mqtt_client.mqttstatus != MQTT_RUNNING)
+        {
+            g_pc_event_subscribed = false;
         }
     }
 
