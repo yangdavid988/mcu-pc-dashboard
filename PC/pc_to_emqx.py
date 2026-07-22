@@ -170,7 +170,7 @@ class ScreenLockDetector:
             for sid, uid, uname, seat, vtn in sessions:
                 if uid != my_uid:
                     continue
-                spath = f'/org/freedesktop.login1/session/{sid}'
+                spath = f'/org/freedesktop/login1/session/{sid}'
                 sobj = bus.get_object('org.freedesktop.login1', spath)
                 props = dbus.Interface(sobj,
                                        'org.freedesktop.DBus.Properties')
