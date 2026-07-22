@@ -18,9 +18,6 @@ volatile bool   g_sht3x_pending = false;
 volatile bool   g_mqtt_connected = false;
 volatile uint32_t g_data_last_tick = 0;
 
-/* Diagnostic counters */
-volatile uint32_t g_mqtt_msg_count = 0;       /* Total MQTT messages received */
-volatile uint32_t g_mqtt_last_msg_tick = 0;   /* Tick when last msg was received */
 
 /* Internal globals */
 static MQTTClient          g_mqtt_client;
@@ -619,10 +616,6 @@ static void messageArrived(MessageData* data, void* discard)
     {
         /* Silently ignore unmatched topics */
     }
-
-    /* Diagnostics: update message counter (called from MQTT task context) */
-    g_mqtt_msg_count++;
-    g_mqtt_last_msg_tick = rtos_time_get_current_system_time_ms();
 }
 
 /* ========================================================================
@@ -741,23 +734,6 @@ void pc_dashboard_task(void* parameters)
         {
             mqtt_printf(MQTT_INFO, "except_fds set, reconnecting...\n");
             MQTTSetStatus(&g_mqtt_client, MQTT_START);
-        }
-
-        /* MQTT alive heartbeat (~1 per 5s) */
-        {
-            static uint32_t s_diag_mqtt_tick = 0;
-            static uint32_t s_diag_mqtt_cnt = 0;
-            uint32_t _now = rtos_time_get_current_system_time_ms();
-            if (_now - s_diag_mqtt_tick >= 5000)
-            {
-                s_diag_mqtt_tick = _now;
-#if defined(CONFIG_DIAG_HEARTBEAT)
-                RTK_LOGI(TAG, "DIAG: mqtt cnt=%lu status=%d\n",
-                    (unsigned long)s_diag_mqtt_cnt,
-                    (int)g_mqtt_client.mqttstatus);
-#endif
-            }
-            s_diag_mqtt_cnt++;
         }
 
         /* MQTT state machine (connect, subscribe, receive) */

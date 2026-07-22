@@ -246,21 +246,6 @@ void dashboard_timer_cb(lv_timer_t* timer)
 {
     LV_UNUSED(timer);
 
-    /* UI timer alive heartbeat (~1 per 5s) */
-    {
-        static uint32_t s_diag_ui_tick = 0;
-        static uint32_t s_diag_ui_cnt = 0;
-        uint32_t _now = rtos_time_get_current_system_time_ms();
-        if (_now - s_diag_ui_tick >= 5000)
-        {
-            s_diag_ui_tick = _now;
-#if defined(CONFIG_DIAG_HEARTBEAT)
-            RTK_LOGI("V3_UI", "DIAG: ui cnt=%lu\n", (unsigned long)s_diag_ui_cnt);
-#endif
-        }
-        s_diag_ui_cnt++;
-    }
-
     /* ==================================================================
      * Lock screen state machine -- MUST come before layout-dependent calls
      * to avoid accessing dangling widget pointers after destroy.

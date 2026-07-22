@@ -162,10 +162,6 @@ extern volatile bool    g_sht3x_pending;
 extern volatile bool    g_mqtt_connected;           /* MQTT connection status */
 extern volatile uint32_t g_data_last_tick;          /* System tick (ms) when last data was received */
 
-/* Diagnostic counters */
-extern volatile uint32_t g_mqtt_msg_count;          /* Total MQTT messages received */
-extern volatile uint32_t g_mqtt_last_msg_tick;      /* Tick when last msg was received */
-
 /* Reset g_pc_stats to defaults (called on MQTT disconnect) */
 void pc_stats_reset_to_default(void);
 

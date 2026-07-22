@@ -99,7 +99,7 @@ void lvgl_disp_flush(lv_display_t* disp, const lv_area_t* area, uint8_t* color_p
      *     collision between LVGL render and DMA scan-out                     */
     lcdc_core_record_flush((uint32_t)color_p, disp);
     lv_display_flush_ready(disp);   /* unblock LVGL flushing state */
-    lcdc_core_debug_flush_called();
+    lcdc_core_count_flush();
 }
 
 uint32_t custom_tick_get(void)

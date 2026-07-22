@@ -13,11 +13,6 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
- /* ========================================================================
-  * Debug switch
-  * ======================================================================== */
-#define LCDC_DEBUG_ENABLE       0       /* 0=disable (was 1 during root-cause investigation; ISR logging causes Heisenbug + ISR-safety concern) */
-
   /* ========================================================================
    * Constants
    * ======================================================================== */
@@ -91,67 +86,16 @@ static void (* volatile g_flip_done_cb)(void*) = NULL;
 static void* volatile g_flip_done_deferred_ctx = NULL;
 
 /* ========================================================================
- * Debug counters
+ * Diagnostic counters (always-on, accessed via public getter functions)
  * ======================================================================== */
 
-typedef struct {
-    /* Event counts */
-    uint32_t frd_count;
-    uint32_t flip_count;
-    uint32_t flush_count;
-    uint32_t underflow_count;
-
-    /* Edge cases */
-    uint32_t pend_overwrite;    /* New pending overwrote unprocessed pending */
-
-    /* Timestamps (ms) */
-    uint32_t last_flush_tick;
-    uint32_t last_frd_tick;
-    uint32_t last_flip_tick;
-
-    /* LINE interrupt tracking (fires even without pending flip) */
-    uint32_t line_count;
-    uint32_t last_line_tick;
-
-    /* flush->flip latency stats */
-    uint32_t lat_total;
-    uint32_t lat_min;
-    uint32_t lat_max;
-    uint32_t lat_count;
-
-    uint32_t log_countdown;
-} lcdc_debug_t;
-
-static volatile lcdc_debug_t g_dbg = {
-    .lat_min = 0xFFFFFFFFU,
-    .log_countdown = 60,
-};
-
-__attribute__((unused))static void lcdc_debug_log(void)
-{
-#if LCDC_DEBUG_ENABLE
-    uint32_t avg_lat = 0;
-    if (g_dbg.lat_count)
-    {
-        avg_lat = g_dbg.lat_total / g_dbg.lat_count;
-    }
-    RTK_LOGS(NOTAG, RTK_LOG_ALWAYS,
-        "\r\n[LCDC_DBG] "
-        "FRD=%d LINE_FLIP=%d FLUSH=%d UNDR=%d | "
-        "OVR=%d | "
-        "LAT(ms):avg=%d min=%d max=%d | "
-        "TICK:FLUSH=%d FRD=%d FLIP=%d\r\n",
-        (int)g_dbg.frd_count,
-        (int)g_dbg.flip_count, (int)g_dbg.flush_count,
-        (int)g_dbg.underflow_count,
-        (int)g_dbg.pend_overwrite,
-        (int)avg_lat, (int)g_dbg.lat_min, (int)g_dbg.lat_max,
-        (int)g_dbg.last_flush_tick, (int)g_dbg.last_frd_tick,
-        (int)g_dbg.last_flip_tick);
-#else
-    (void)0;
-#endif /* LCDC_DEBUG_ENABLE */
-}
+static volatile uint32_t s_frd_count = 0;
+static volatile uint32_t s_flip_count = 0;
+static volatile uint32_t s_flush_count = 0;
+static volatile uint32_t s_pend_overwrite = 0;
+static volatile uint32_t s_last_frd_tick = 0;
+static volatile uint32_t s_last_line_tick = 0;
+static volatile uint32_t s_last_flip_tick = 0;
 
 /* ========================================================================
  * IRQ handler — based on official ST7262 SDK implementation
@@ -172,8 +116,8 @@ static void lcdc_irq_handler(void)
     /* -- Frame end interrupt: counters + old path -- */
     if (IntId & LCDC_BIT_LCD_FRD_INTS)
     {
-        g_dbg.frd_count++;
-        g_dbg.last_frd_tick = rtos_time_get_current_system_time_ms();
+        s_frd_count++;
+        s_last_frd_tick = rtos_time_get_current_system_time_ms();
 
         /* [Old path] Single buffer + dirty region accumulation */
         if (g_dirty_pending || g_refresh)
@@ -214,33 +158,16 @@ static void lcdc_irq_handler(void)
     if (IntId & LCDC_BIT_LCD_LIN_INTS)
     {
         /* Track every LINE interrupt (even without pending flip — for stall detection) */
-        g_dbg.line_count++;
-        g_dbg.last_line_tick = rtos_time_get_current_system_time_ms();
+        s_last_line_tick = rtos_time_get_current_system_time_ms();
 
         if (g_pending_flip_fb)
         {
             LCDC_DMAImgCfg(LCDC, g_pending_flip_fb);
             LCDC_ShadowReloadConfig(LCDC);
 
-            /* Flip counters + flush→flip latency (rtos_time_* is ISR-safe: uses xTaskGetTickCountFromISR) */
-            {
-                g_dbg.flip_count++;
-                g_dbg.last_flip_tick = rtos_time_get_current_system_time_ms();
-
-                uint32_t lat = g_dbg.last_flip_tick - g_dbg.last_flush_tick;
-                g_dbg.lat_total += lat;
-                g_dbg.lat_count++;
-                if (lat < g_dbg.lat_min) g_dbg.lat_min = lat;
-                if (lat > g_dbg.lat_max) g_dbg.lat_max = lat;
-
-                /* Periodic LCDC debug log (every ~60 flips, ~1s at 60fps) */
-                if (g_dbg.log_countdown) { g_dbg.log_countdown--; }
-                if (g_dbg.log_countdown == 0)
-                {
-                    lcdc_debug_log();
-                    g_dbg.log_countdown = 60;
-                }
-            }
+            /* Flip counters (rtos_time_* is ISR-safe: uses xTaskGetTickCountFromISR) */
+            s_flip_count++;
+            s_last_flip_tick = rtos_time_get_current_system_time_ms();
 
             /* Defer flip_done_cb to FRD to avoid ~3ms tearing window */
             g_flip_done_deferred_ctx = (void*)g_pending_context;
@@ -261,7 +188,6 @@ static void lcdc_irq_handler(void)
     if (IntId & LCDC_BIT_DMA_UN_INTS)
     {
         RTK_LOGS(NOTAG, RTK_LOG_ALWAYS, "intr: dma udf !!! \r\n");
-        g_dbg.underflow_count++;
     }
 }
 
@@ -470,7 +396,7 @@ void lcdc_core_record_flush(uint32_t fb_addr, void* context)
     /* Record ONLY — no pending flip */
     taskENTER_CRITICAL();
     if (g_pending_flush_fb)
-        g_dbg.pend_overwrite++;
+        s_pend_overwrite++;
     g_pending_flush_fb = fb_addr;
     g_pending_flush_ctx = context;
     taskEXIT_CRITICAL();
@@ -482,7 +408,7 @@ void lcdc_core_flush_commit(void)
     if (g_pending_flush_fb)
     {
         if (g_pending_flip_fb)
-            g_dbg.pend_overwrite++;
+            s_pend_overwrite++;
         g_pending_flip_fb = g_pending_flush_fb;
         g_pending_context = g_pending_flush_ctx;
         g_pending_flush_fb = 0;
@@ -500,11 +426,10 @@ void lcdc_core_register_flip_done(void (*cb)(void*))
  * Debug API
  * ======================================================================== */
 
- /** Record one flush_cb call (called by lcd_drv.c, stats flush->flip latency) */
-void lcdc_core_debug_flush_called(void)
+ /** Record one flush_cb call (called by lcd_drv.c) */
+void lcdc_core_count_flush(void)
 {
-    g_dbg.flush_count++;
-    g_dbg.last_flush_tick = rtos_time_get_current_system_time_ms();
+    s_flush_count++;
 }
 
 /* ========================================================================
@@ -513,37 +438,32 @@ void lcdc_core_debug_flush_called(void)
 
 uint32_t lcdc_core_get_last_frd_tick(void)
 {
-    return g_dbg.last_frd_tick;
+    return s_last_frd_tick;
 }
 
 uint32_t lcdc_core_get_last_line_tick(void)
 {
-    return g_dbg.last_line_tick;
-}
-
-uint32_t lcdc_core_get_last_flip_tick(void)
-{
-    return g_dbg.last_flip_tick;
+    return s_last_line_tick;
 }
 
 uint32_t lcdc_core_get_frd_count(void)
 {
-    return g_dbg.frd_count;
+    return s_frd_count;
 }
 
 uint32_t lcdc_core_get_flush_count(void)
 {
-    return g_dbg.flush_count;
+    return s_flush_count;
 }
 
 uint32_t lcdc_core_get_flip_count(void)
 {
-    return g_dbg.flip_count;
+    return s_flip_count;
 }
 
 uint32_t lcdc_core_get_pend_overwrite(void)
 {
-    return g_dbg.pend_overwrite;
+    return s_pend_overwrite;
 }
 
 bool lcdc_core_is_flip_pending(void)

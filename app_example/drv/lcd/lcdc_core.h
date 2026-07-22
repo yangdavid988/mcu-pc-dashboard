@@ -84,30 +84,23 @@ void lcdc_core_flush_commit(void);
 void lcdc_core_register_flip_done(void (*cb)(void *));
 
 /* ========================================================================
- * Debug API (for diagnostic tearing issues)
- * ======================================================================== */
-
-/* Record one flush_cb call (called by lcd_drv.c, stats flush->flip latency) */
-void lcdc_core_debug_flush_called(void);
-
-/* ========================================================================
- * Diagnostic getters (always-on, for cross-task freeze detection)
+ * Diagnostic getters (for cross-task freeze detection)
  * ======================================================================== */
 
 /* Returns last FRD (frame-done) ISR tick in ms */
 uint32_t lcdc_core_get_last_frd_tick(void);
 
-/* Returns last LINE ISR tick in ms */
+/* Returns last LINE ISR tick in ms (for stall detection) */
 uint32_t lcdc_core_get_last_line_tick(void);
-
-/* Returns last flip (pending consumed by LINE) tick in ms */
-uint32_t lcdc_core_get_last_flip_tick(void);
 
 /* Returns FRD interrupt count (number of frames completed) */
 uint32_t lcdc_core_get_frd_count(void);
 
 /* Returns number of flush_cb calls */
 uint32_t lcdc_core_get_flush_count(void);
+
+/* Record one flush_cb call (called by lcd_drv.c flush callback) */
+void lcdc_core_count_flush(void);
 
 /* Returns number of page flips (LINE consumed pending_flip) */
 uint32_t lcdc_core_get_flip_count(void);

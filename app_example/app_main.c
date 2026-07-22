@@ -117,19 +117,8 @@ static void lvgl_main_thread(void* parameters)
 
     /* LVGL main loop */
     {
-        uint32_t diag_lvgl_tick = 0;
-        uint32_t diag_lvgl_cnt = 0;
         while (1)
         {
-            uint32_t _now = rtos_time_get_current_system_time_ms();
-            if (_now - diag_lvgl_tick >= 5000)
-            {
-                diag_lvgl_tick = _now;
-#if defined(CONFIG_DIAG_HEARTBEAT)
-                RTK_LOGI(TAG, "DIAG: lvgl cnt=%lu\n", (unsigned long)diag_lvgl_cnt);
-#endif
-            }
-            diag_lvgl_cnt++;
 
             /* Frame gate: wait for previous frame's pending flip to be
              * consumed by LINE ISR before starting a new LVGL frame.
