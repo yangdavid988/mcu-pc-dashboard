@@ -1,12 +1,11 @@
-#Requires -Version 7.0
-
 param(
     [string]$RunCommand = ""
 )
 
 # ============================================
 #  xxx_demo\env.ps1
-#  Calls SDK env.bat for environment setup, then enters pwsh
+#  Calls SDK env.bat for environment setup, then enters pwsh / powershell
+#  Detects PS edition at runtime — works with both PowerShell 7+ and 5.1
 #  Does NOT modify any SDK files — remains usable after SDK sync
 #  Supports -RunCommand parameter for automatic command execution
 # ============================================
@@ -37,30 +36,33 @@ if (-not (Test-Path $originalBat)) {
     exit 1
 }
 
+# Detect PS edition — choose pwsh (Core) or powershell (Desktop) for the launch command
+$shellExe = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh' } else { 'powershell' }
+
 # Clean up any leftover temp files from previous runs
-$tempBat = Join-Path $sdkRoot "_env_pwsh.bat"
+$tempBat = Join-Path $sdkRoot "_env_ps.bat"
 Remove-Item $tempBat -Force -ErrorAction SilentlyContinue
 
-# Read SDK env.bat, replace last line cmd.exe /k -> pwsh launch command
+# Read SDK env.bat, replace last line cmd.exe /k -> PS launch command
 $lines = Get-Content $originalBat
 
-# If -RunCommand is specified, append to pwsh launch command tail
+# If -RunCommand is specified, append to launch command tail
 $extraCmd = ""
 if ($RunCommand) { $extraCmd = "; $RunCommand" }
 
-$pwshCommand = 'pwsh -NoExit -Command "& ''%BASE_DIR%\.venv\Scripts\Activate.ps1''; ' + `
-    '$Host.UI.RawUI.WindowTitle = ''' + $demoName + '''; ' + `
-    'function build.py { python build.py $args }; ' + `
-    'function menuconfig.py { python menuconfig.py $args }; ' + `
-    'function flash.py { python flash.py $args }; ' + `
-    'function monitor.py { python monitor.py $args }; ' + `
-    'function ameba.py { python ''%BASE_DIR%\ameba.py'' $args }; ' + `
-    'function bb { $py = Join-Path (Split-Path $env:AMEBA_ENV_PATH -Parent) ''build_flash_monitor.py''; if (Test-Path $py) { python $py @args } else { & ameba.py build } }; ' + `
-    'function bm { ameba.py menuconfig }; ' + `
-    'function bms { ameba.py menuconfig -s prj.conf }' + `
-    $extraCmd + '"'
+$psCommand = "$shellExe -NoExit -Command ""& '%BASE_DIR%\.venv\Scripts\Activate.ps1'; " + `
+    "`$Host.UI.RawUI.WindowTitle = '$demoName'; " + `
+    "function build.py { python build.py `$args }; " + `
+    "function menuconfig.py { python menuconfig.py `$args }; " + `
+    "function flash.py { python flash.py `$args }; " + `
+    "function monitor.py { python monitor.py `$args }; " + `
+    "function ameba.py { python '%BASE_DIR%\ameba.py' `$args }; " + `
+    "function bb { `$py = Join-Path (Split-Path `$env:AMEBA_ENV_PATH -Parent) 'build_flash_monitor.py'; if (Test-Path `$py) { python `$py @args } else { & ameba.py build } }; " + `
+    "function bm { ameba.py menuconfig }; " + `
+    "function bms { ameba.py menuconfig -s prj.conf }" + `
+    "$extraCmd"""
 
-$lines[-1] = $pwshCommand
+$lines[-1] = $psCommand
 
 # Write to SDK directory (so %~dp0 resolves correctly to SDK root)
 $lines | Out-File -FilePath $tempBat -Encoding ascii -Force
