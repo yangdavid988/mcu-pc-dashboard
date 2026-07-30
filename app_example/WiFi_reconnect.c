@@ -2,21 +2,22 @@
 #include "rtw_skbuff.h"
 u8 retry_cnt = 0;
 
-#define TAG         "WIFI_RECONNECT"
+#define TAG "WIFI_RECONNECT"
+
 int user_WiFi_connect()
 {
     struct rtw_network_info connect_param = { 0 };
     /*Connect parameter set*/
-    memcpy(connect_param.ssid.val, (char*)SSID, strlen(SSID));/**< SSID value, terminated with a null character.*/
-    connect_param.ssid.len = strlen(SSID);
-    connect_param.password = (unsigned char*)PASSWORD;//u8
+    memcpy(connect_param.ssid.val, (char*) SSID, strlen(SSID)); /**< SSID value, terminated with a null character.*/
+    connect_param.ssid.len     = strlen(SSID);
+    connect_param.password     = (unsigned char*) PASSWORD; // u8
     connect_param.password_len = strlen(PASSWORD);
-    int ret = 0;
+    int ret                    = 0;
 
 WIFI_CONNECT:
     /*Connect*/
     RTK_LOGI(TAG, "Wifi connect start, retry cnt = %d\r\n", retry_cnt);
-    ret = wifi_connect(&connect_param, 1);// 1 /* step2: malloc and set synchronous connection related variables*/
+    ret = wifi_connect(&connect_param, 1); // 1 /* step2: malloc and set synchronous connection related variables*/
     if (ret != RTK_SUCCESS)
     {
         RTK_LOGI(TAG, "Reconnect Fail:%d\r\n", ret);
@@ -43,7 +44,7 @@ WIFI_CONNECT:
     {
         RTK_LOGI(TAG, "Wifi connect success, Start DHCP\n");
         ret = COMPAT_REQUEST_IP(NETIF_WLAN_STA_INDEX);
-        gpio_toggle((u32)LED1_PIN, 0);//DHCP wait for 500ms
+        gpio_toggle((u32) LED1_PIN, 0); // DHCP wait for 500ms
         if (ret == DHCP_ADDRESS_ASSIGNED)
         {
             RTK_LOGI(TAG, "DHCP Success\r\n");
@@ -66,15 +67,16 @@ WIFI_CONNECT:
     }
     else
     {
-        //rtos_time_delay_ms(RETRY_INTERVAL);
-        gpio_toggle((u32)LED2_PIN, RETRY_INTERVAL);
+        // rtos_time_delay_ms(RETRY_INTERVAL);
+        gpio_toggle((u32) LED2_PIN, RETRY_INTERVAL);
         goto WIFI_CONNECT;
     }
 }
+
 void gpio_led_init()
 {
-    GPIO_InitTypeDef led1_gpio; //Green light
-    GPIO_InitTypeDef led2_gpio;    //Red light
+    GPIO_InitTypeDef led1_gpio; // Green light
+    GPIO_InitTypeDef led2_gpio; // Red light
 
     led1_gpio.GPIO_Pin = LED1_PIN;
     led2_gpio.GPIO_Pin = LED2_PIN;
@@ -88,6 +90,7 @@ void gpio_led_init()
     GPIO_WriteBit(LED2_PIN, 0);
     return;
 }
+
 void gpio_toggle(u32 GPIO_Pin, int time_ms)
 {
     if (time_ms == 0)
@@ -120,7 +123,7 @@ void WiFi_connect_task()
     1 running,0 is not, softap interface is 1,sta iface = 0*/
     while (!(wifi_is_running(STA_WLAN_INDEX)))
     {
-        gpio_toggle((u32)LED2_PIN, 200);
+        gpio_toggle((u32) LED2_PIN, 200);
     }
     GPIO_WriteBit(LED2_PIN, 1);
     /* Start connect */
@@ -138,18 +141,17 @@ void WiFi_connect_task()
     rtos_task_delete(NULL);
 }
 
-struct rtw_event_hdl_func_t event_external_hdl[1] =
-{
-    {RTW_EVENT_JOIN_STATUS,            WiFi_join_status_event_hdl},
+struct rtw_event_hdl_func_t event_external_hdl[1] = {
+    { RTW_EVENT_JOIN_STATUS, WiFi_join_status_event_hdl },
 };
 u16 array_len_of_event_external_hdl = sizeof(event_external_hdl) / sizeof(struct rtw_event_hdl_func_t);
 
-//WiFi connection status changes trigger this event handler; reconnect to AP is based on this function
+// WiFi connection status changes trigger this event handler; reconnect to AP is based on this function
 void WiFi_join_status_event_hdl(u8* evt_info)
 {
-    struct rtw_event_join_status_info* join_status_info = (struct rtw_event_join_status_info*)evt_info;
-    u8 join_status = join_status_info->status;
-    struct rtw_event_disconnect* disconnect;
+    struct rtw_event_join_status_info* join_status_info = (struct rtw_event_join_status_info*) evt_info;
+    u8                                 join_status      = join_status_info->status;
+    struct rtw_event_disconnect*       disconnect;
 
     /*Reconnect when disconnect after connected*/
     if (join_status == RTW_JOINSTATUS_DISCONNECT)
@@ -165,7 +167,7 @@ void WiFi_join_status_event_hdl(u8* evt_info)
         }
 
         /*Creat a task to do wifi reconnect because call WIFI API in WIFI event is not safe*/
-        if (rtos_task_create(NULL, "WiFi_reconnect_task", (rtos_task_t)WiFi_reconnect_task, NULL, 2048, tskIDLE_PRIORITY + 1) != RTK_SUCCESS)
+        if (rtos_task_create(NULL, "WiFi_reconnect_task", (rtos_task_t) WiFi_reconnect_task, NULL, 2048, tskIDLE_PRIORITY + 1) != RTK_SUCCESS)
         {
             RTK_LOGI(TAG, "Create reconnect task failed\n");
         }
@@ -174,8 +176,8 @@ void WiFi_join_status_event_hdl(u8* evt_info)
 
 void WiFi_reconnect_task()
 {
-    //do reconnect,call wifi connect func
-    gpio_toggle((u32)LED2_PIN, RETRY_INTERVAL);
+    // do reconnect,call wifi connect func
+    gpio_toggle((u32) LED2_PIN, RETRY_INTERVAL);
     if (user_WiFi_connect() != RTK_SUCCESS)
     {
         RTK_LOGE(TAG, "user_WiFi_connect failed!\r\n");

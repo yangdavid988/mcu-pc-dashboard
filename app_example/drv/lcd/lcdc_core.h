@@ -7,7 +7,8 @@
 /* ========================================================================
  * Image format enumeration
  * ======================================================================== */
-typedef enum {
+typedef enum
+{
     LDC_IMG_FMT_RGB565,
     LDC_IMG_FMT_RGB888,
     LDC_IMG_FMT_ARGB8888,
@@ -16,26 +17,27 @@ typedef enum {
 /* ========================================================================
  * Screen configuration table — each screen provides pinmux + 6 timing params
  * ======================================================================== */
-typedef struct {
+typedef struct
+{
     /* LCD timing parameters (HV mode) */
-    uint8_t  vsw;
-    uint8_t  vbp;
-    uint8_t  vfp;
-    uint8_t  hsw;
-    uint8_t  hbp;
-    uint8_t  hfp;
+    uint8_t vsw;
+    uint8_t vbp;
+    uint8_t vfp;
+    uint8_t hsw;
+    uint8_t hbp;
+    uint8_t hfp;
 
     /* Image format */
     lcdc_image_format_t image_format;
 
     /* Pin configuration function (provided by cfg, differs per screen) */
-    void     (*pinmux_config)(void);
+    void (*pinmux_config)(void);
 
     /* Backlight/reset init (optional, DBL070 needs extra delay) */
-    void     (*backlight_init)(void);
+    void (*backlight_init)(void);
 
     /* Driver name (for logging) */
-    const char *name;
+    const char* name;
 
     /* Frame buffer base address (PSRAM address) */
     uint32_t fb_base;
@@ -46,22 +48,22 @@ typedef struct {
  * ======================================================================== */
 
 /* Initialize with screen configuration table */
-void lcdc_core_init(const lcdc_screen_cfg_t *cfg);
+void lcdc_core_init(const lcdc_screen_cfg_t* cfg);
 
 /* Flush buffer (DCache_Clean + DMA trigger) */
-void lcdc_core_flush_buffer(uint8_t *buffer);
+void lcdc_core_flush_buffer(uint8_t* buffer);
 
 /* Get resolution */
-void lcdc_core_get_info(int *width, int *height);
+void lcdc_core_get_info(int* width, int* height);
 
 /* Get PSRAM-section-allocated framebuffer base address */
 uint32_t lcdc_core_get_fb_base(void);
 
 /* Register VBlank callback */
-void lcdc_core_register_vblank(void (*cb)(void *), void *data);
+void lcdc_core_register_vblank(void (*cb)(void*), void* data);
 
 /* Set DMA buffer pointer + trigger refresh only (no DCache_Clean, caller's responsibility) */
-void lcdc_core_trigger_refresh(uint8_t *buffer);
+void lcdc_core_trigger_refresh(uint8_t* buffer);
 
 /* VBlank sync: mark dirty region, defer DCache flush to VBlank ISR (eliminates tearing) */
 void lcdc_core_mark_dirty(uint32_t off, uint32_t len);
@@ -74,14 +76,14 @@ void lcdc_core_flush_now(uint32_t fb_addr);
  * ======================================================================== */
 
 /* Record a completed render — DCache_Clean, defers pending flip to flush_commit */
-void lcdc_core_record_flush(uint32_t fb_addr, void *context);
+void lcdc_core_record_flush(uint32_t fb_addr, void* context);
 
 /* Commit the recorded flush — set pending flip for LINE ISR to consume.
  * Call after lv_timer_handler() or lv_refr_now() completes.            */
 void lcdc_core_flush_commit(void);
 
 /* Register flip-done callback (called after DMA switch in VBlank ISR) */
-void lcdc_core_register_flip_done(void (*cb)(void *));
+void lcdc_core_register_flip_done(void (*cb)(void*));
 
 /* ========================================================================
  * Diagnostic getters (for cross-task freeze detection)

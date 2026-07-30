@@ -1,7 +1,7 @@
 #include "pc_dashboard_lock_screen.h"
 #include "pc_dashboard.h"
 #include "pc_dashboard_theme.h"
-#include "drv/lcd/lcdc_core.h"   /* lcdc_core_get_flush_count */
+#include "drv/lcd/lcdc_core.h" /* lcdc_core_get_flush_count */
 #include <math.h>
 #include <stdio.h>
 #include <time.h>
@@ -41,62 +41,62 @@ LV_IMG_DECLARE(clock432);
  * sec 1 s, min 1.5 s, hour 2 s.  The g_animating flag blocks the 1 Hz
  * updater while the animation is running.
  * ======================================================================== */
-#define CLOCK_AREA_W            400
-#define CLOCK_AREA_H            480
-#define LOCAL_CENTER_X          (CLOCK_AREA_W / 2)  /* 200 */
-#define LOCAL_CENTER_Y          (CLOCK_AREA_H / 2)  /* 240 */
-#define CLOCK_IMG_W             400
-#define CLOCK_IMG_H             432     /* pre-compensated: 400 * 0.1923 / 0.1784 */
-#define CLOCK_RADIUS            200     /* short-dimension radius (half of CLOCK_IMG_W) */
-#define PIXEL_RATIO_X1000       1078    /* 0.1923 / 0.1784 * 1000 */
+#define CLOCK_AREA_W      400
+#define CLOCK_AREA_H      480
+#define LOCAL_CENTER_X    (CLOCK_AREA_W / 2) /* 200 */
+#define LOCAL_CENTER_Y    (CLOCK_AREA_H / 2) /* 240 */
+#define CLOCK_IMG_W       400
+#define CLOCK_IMG_H       432  /* pre-compensated: 400 * 0.1923 / 0.1784 */
+#define CLOCK_RADIUS      200  /* short-dimension radius (half of CLOCK_IMG_W) */
+#define PIXEL_RATIO_X1000 1078 /* 0.1923 / 0.1784 * 1000 */
 
- /* Hand geometry */
-#define HAND_SEC_LEN            165
-#define HAND_MIN_LEN            130
-#define HAND_HOUR_LEN           100
-#define HAND_SEC_W              2
-#define HAND_MIN_W              5
-#define HAND_HOUR_W             8
+/* Hand geometry */
+#define HAND_SEC_LEN  165
+#define HAND_MIN_LEN  130
+#define HAND_HOUR_LEN 100
+#define HAND_SEC_W    2
+#define HAND_MIN_W    5
+#define HAND_HOUR_W   8
 
 /* Sweep animation timing (matches LVGL_clock_demo play_ntp_sync_animation) */
-#define ANIM_SEC_MS             1000
-#define ANIM_MIN_MS             1500
-#define ANIM_HOUR_MS            2000
+#define ANIM_SEC_MS  1000
+#define ANIM_MIN_MS  1500
+#define ANIM_HOUR_MS 2000
 
- /* ========================================================================
-  * Static widget references
-  * ======================================================================== */
+/* ========================================================================
+ * Static widget references
+ * ======================================================================== */
 static lv_obj_t* g_lock_container = NULL;
-static lv_obj_t* g_hand_hour = NULL;
-static lv_obj_t* g_hand_min = NULL;
-static lv_obj_t* g_hand_sec = NULL;
-static lv_obj_t* g_date_window = NULL;   /* date capsule at 3 o'clock */
-static lv_obj_t* g_date_label = NULL;   /* date number (left half) */
-static lv_obj_t* g_week_label = NULL;   /* weekday abbrev (right half) */
+static lv_obj_t* g_hand_hour      = NULL;
+static lv_obj_t* g_hand_min       = NULL;
+static lv_obj_t* g_hand_sec       = NULL;
+static lv_obj_t* g_date_window    = NULL; /* date capsule at 3 o'clock */
+static lv_obj_t* g_date_label     = NULL; /* date number (left half) */
+static lv_obj_t* g_week_label     = NULL; /* weekday abbrev (right half) */
 
-static lv_point_precise_t g_pts_hour[2] = { {LOCAL_CENTER_X, LOCAL_CENTER_Y},
-                                           {LOCAL_CENTER_X, LOCAL_CENTER_Y - HAND_HOUR_LEN} };
-static lv_point_precise_t g_pts_min[2] = { {LOCAL_CENTER_X, LOCAL_CENTER_Y},
-                                           {LOCAL_CENTER_X, LOCAL_CENTER_Y - HAND_MIN_LEN} };
-static lv_point_precise_t g_pts_sec[2] = { {LOCAL_CENTER_X, LOCAL_CENTER_Y},
-                                           {LOCAL_CENTER_X, LOCAL_CENTER_Y - HAND_SEC_LEN} };
+static lv_point_precise_t g_pts_hour[2] = { { LOCAL_CENTER_X, LOCAL_CENTER_Y },
+                                            { LOCAL_CENTER_X, LOCAL_CENTER_Y - HAND_HOUR_LEN } };
+static lv_point_precise_t g_pts_min[2]  = { { LOCAL_CENTER_X, LOCAL_CENTER_Y },
+                                            { LOCAL_CENTER_X, LOCAL_CENTER_Y - HAND_MIN_LEN } };
+static lv_point_precise_t g_pts_sec[2]  = { { LOCAL_CENTER_X, LOCAL_CENTER_Y },
+                                            { LOCAL_CENTER_X, LOCAL_CENTER_Y - HAND_SEC_LEN } };
 
 /* Time tracking */
 static uint32_t g_lock_last_second = 0;
-static int      g_last_day = -1;
+static int      g_last_day         = -1;
 
 /* Animation guards */
-static bool     g_animating = false;  /* blocks 1 Hz updater during sweep */
-static bool     g_sweep_done = false;  /* true once the initial sweep completes */
+static bool g_animating  = false; /* blocks 1 Hz updater during sweep */
+static bool g_sweep_done = false; /* true once the initial sweep completes */
 
 /* Deferred sweep: create stores the target angles, update starts the
  * animation on the next 1 Hz tick to avoid DIRECT-mode double-buffer
  * desync caused by registering an lv_anim inside the two nested
  * lv_refr_now() calls of create_lock_screen_clock(). */
-static bool     g_sweep_pending = false;
-static int      g_pend_sec = 0;
-static int      g_pend_min = 0;
-static int      g_pend_hour = 0;
+static bool g_sweep_pending = false;
+static int  g_pend_sec      = 0;
+static int  g_pend_min      = 0;
+static int  g_pend_hour     = 0;
 
 /* PSRAM-cached clock432 image descriptor (file-level so update()
  * can pre-warm from PSRAM -- not flash -- before each 1 Hz render). */
@@ -110,7 +110,8 @@ static lv_img_dsc_t s_img_ram;
 static int calc_weekday(int y, int m, int d)
 {
     static int t[] = { 0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4 };
-    if (m < 3) y -= 1;
+    if (m < 3)
+        y -= 1;
     return (y + y / 4 - y / 100 + y / 400 + t[m - 1] + d) % 7;
 }
 
@@ -122,9 +123,9 @@ static int calc_weekday(int y, int m, int d)
  * ======================================================================== */
 static void set_hand_angle(lv_point_precise_t pts[2], int len, int angle_deg)
 {
-    double rad = (double)angle_deg * 3.14159265 / 180.0;
-    pts[1].x = LOCAL_CENTER_X + (int)(len * sin(rad));
-    pts[1].y = LOCAL_CENTER_Y - (int)(len * PIXEL_RATIO_X1000 / 1000 * cos(rad));
+    double rad = (double) angle_deg * 3.14159265 / 180.0;
+    pts[1].x   = LOCAL_CENTER_X + (int) (len * sin(rad));
+    pts[1].y   = LOCAL_CENTER_Y - (int) (len * PIXEL_RATIO_X1000 / 1000 * cos(rad));
 }
 
 /* ========================================================================
@@ -136,12 +137,14 @@ static void sweep_anim_sec_cb(void* var, int32_t v)
     set_hand_angle(g_pts_sec, HAND_SEC_LEN, v);
     lv_line_set_points(g_hand_sec, g_pts_sec, 2);
 }
+
 static void sweep_anim_min_cb(void* var, int32_t v)
 {
     LV_UNUSED(var);
     set_hand_angle(g_pts_min, HAND_MIN_LEN, v);
     lv_line_set_points(g_hand_min, g_pts_min, 2);
 }
+
 static void sweep_anim_hour_cb(void* var, int32_t v)
 {
     LV_UNUSED(var);
@@ -155,7 +158,7 @@ static void sweep_anim_hour_cb(void* var, int32_t v)
 static void anim_ready_cb(lv_anim_t* a)
 {
     LV_UNUSED(a);
-    g_animating = false;   /* allow 1 Hz timer to update hands now */
+    g_animating = false; /* allow 1 Hz timer to update hands now */
 }
 
 /* ========================================================================
@@ -163,7 +166,7 @@ static void anim_ready_cb(lv_anim_t* a)
  * ======================================================================== */
 static void start_sweep_animation(int t_sec, int t_min, int t_hour)
 {
-    g_animating = true;
+    g_animating  = true;
     g_sweep_done = true;
 
     /* Hands default to 12 o'clock (0 deg) -- no pre-set needed */
@@ -220,12 +223,12 @@ void create_lock_screen_clock(void)
      * 24 px top/bottom strips blend seamlessly with whatever
      * background is set. */
 
-     /* ---- Fully transparent 400 x 480 root container (centred) ---- */
+    /* ---- Fully transparent 400 x 480 root container (centred) ---- */
     g_lock_container = lv_obj_create(scr);
     lv_obj_set_size(g_lock_container, CLOCK_AREA_W, CLOCK_AREA_H);
     lv_obj_set_pos(g_lock_container,
-        (SCREEN_WIDTH - CLOCK_AREA_W) / 2,
-        (SCREEN_HEIGHT - CLOCK_AREA_H) / 2);
+                   (SCREEN_WIDTH - CLOCK_AREA_W) / 2,
+                   (SCREEN_HEIGHT - CLOCK_AREA_H) / 2);
     lv_obj_set_style_pad_all(g_lock_container, 0, 0);
     lv_obj_set_style_border_width(g_lock_container, 0, 0);
     lv_obj_set_style_radius(g_lock_container, 0, 0);
@@ -262,31 +265,30 @@ void create_lock_screen_clock(void)
     {
         if (!s_img_cached)
         {
-            uint8_t* buf = (uint8_t*)0x60300000u;
+            uint8_t* buf = (uint8_t*) 0x60300000u;
             memcpy(buf, clock432.data, clock432.data_size);
-            DCache_Clean((uint32_t)buf, clock432.data_size);
+            DCache_Clean((uint32_t) buf, clock432.data_size);
             __DSB();
 
             memcpy(&s_img_ram, &clock432, sizeof(lv_img_dsc_t));
-            s_img_ram.data = (const uint8_t*)buf;
-            s_img_cached = true;
+            s_img_ram.data = (const uint8_t*) buf;
+            s_img_cached   = true;
 
             RTK_LOGI("LOCK_SCREEN",
-                "clock432 copied to PSRAM (%d bytes)\n",
-                (int)clock432.data_size);
+                     "clock432 copied to PSRAM (%d bytes)\n",
+                     (int) clock432.data_size);
         }
         else
         {
             RTK_LOGI("LOCK_SCREEN",
-                "clock432 reuse PSRAM cache\n");
+                     "clock432 reuse PSRAM cache\n");
         }
 
         /* ---- 1. Clock face (400 x 432) ---- */
         lv_obj_t* img = lv_image_create(g_lock_container);
         lv_image_set_src(img, &s_img_ram);
         lv_obj_set_size(img, CLOCK_IMG_W, CLOCK_IMG_H);
-        lv_obj_set_pos(img, LOCAL_CENTER_X - CLOCK_IMG_W / 2,
-            LOCAL_CENTER_Y - CLOCK_IMG_H / 2);
+        lv_obj_set_pos(img, LOCAL_CENTER_X - CLOCK_IMG_W / 2, LOCAL_CENTER_Y - CLOCK_IMG_H / 2);
     }
 
     /* ---- 2. Date window at 3 o'clock (split-colour + 3D bevel, BELOW hands) ---- */
@@ -385,9 +387,9 @@ void create_lock_screen_clock(void)
      * first lv_refr_now() renderer encounters hot cache lines for
      * the entire PSRAM-based clock432 bitmap.                       */
     {
-        const volatile uint32_t* p = (const volatile uint32_t*)s_img_ram.data;
-        uint32_t word_count = clock432.data_size / 4;
-        volatile uint32_t warm __attribute__((unused)) = 0;
+        const volatile uint32_t* p                            = (const volatile uint32_t*) s_img_ram.data;
+        uint32_t                 word_count                   = clock432.data_size / 4;
+        volatile uint32_t        warm __attribute__((unused)) = 0;
         for (uint32_t i = 0; i < word_count; i++)
             warm += p[i];
     }
@@ -412,13 +414,13 @@ void create_lock_screen_clock(void)
 
     /* Reset tracking */
     g_lock_last_second = 0;
-    g_last_day = -1;
-    g_animating = false;
-    g_sweep_done = false;
+    g_last_day         = -1;
+    g_animating        = false;
+    g_sweep_done       = false;
 
     /* ---- Try to get time and start sweep animation ---- */
     taskENTER_CRITICAL();
-    uint32_t ts_base = g_time_base_ts;
+    uint32_t ts_base    = g_time_base_ts;
     uint32_t ts_base_ms = g_time_base_ms;
     taskEXIT_CRITICAL();
 
@@ -428,7 +430,7 @@ void create_lock_screen_clock(void)
         time_t sntp_now = time(NULL);
         if (sntp_now > 1700000000)
         {
-            ts_base = (uint32_t)sntp_now;
+            ts_base    = (uint32_t) sntp_now;
             ts_base_ms = rtos_time_get_current_system_time_ms();
             taskENTER_CRITICAL();
             g_time_base_ts = ts_base;
@@ -439,11 +441,12 @@ void create_lock_screen_clock(void)
 
     if (ts_base != 0 && ts_base > 1700000000)
     {
-        uint32_t now_ms = rtos_time_get_current_system_time_ms();
-        uint32_t elapsed_s = (now_ms - ts_base_ms) / 1000;
+        uint32_t now_ms     = rtos_time_get_current_system_time_ms();
+        uint32_t elapsed_s  = (now_ms - ts_base_ms) / 1000;
         uint32_t current_ts = ts_base + elapsed_s + UTC8_OFFSET_SEC;
 
-        uint16_t yr; uint8_t mo, da, hr, mi, se;
+        uint16_t yr;
+        uint8_t  mo, da, hr, mi, se;
         unix_to_datetime(current_ts, &yr, &mo, &da, &hr, &mi, &se);
 
         /* Block 1Hz updater during sweep animation */
@@ -451,26 +454,25 @@ void create_lock_screen_clock(void)
 
         /* Initial date label */
         {
-            static const char* dow[] = { "Sun", "Mon", "Tue", "Wed",
-                                        "Thu", "Fri", "Sat" };
-            int wd = calc_weekday((int)yr, (int)mo, (int)da);
-            char d_buf[8];
-            char w_buf[8];
-            snprintf(d_buf, sizeof(d_buf), "%02u", (unsigned)da);
+            static const char* dow[] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+            int                wd    = calc_weekday((int) yr, (int) mo, (int) da);
+            char               d_buf[8];
+            char               w_buf[8];
+            snprintf(d_buf, sizeof(d_buf), "%02u", (unsigned) da);
             snprintf(w_buf, sizeof(w_buf), "%s", dow[wd]);
             lv_label_set_text(g_date_label, d_buf);
             lv_label_set_text(g_week_label, w_buf);
         }
-        g_last_day = (int)da;
+        g_last_day = (int) da;
 
         /* Defer sweep start -- store angles, start from update() */
-        int t_sec = (int)se * 6;
-        int t_min = (int)mi * 6;
-        int t_hour = (int)(hr % 12) * 30 + (int)(mi / 2);
+        int t_sec       = (int) se * 6;
+        int t_min       = (int) mi * 6;
+        int t_hour      = (int) (hr % 12) * 30 + (int) (mi / 2);
         g_sweep_pending = true;
-        g_pend_sec = t_sec;
-        g_pend_min = t_min;
-        g_pend_hour = t_hour;
+        g_pend_sec      = t_sec;
+        g_pend_min      = t_min;
+        g_pend_hour     = t_hour;
     }
 }
 
@@ -508,7 +510,7 @@ void update_lock_screen_clock(void)
         return;
 
     taskENTER_CRITICAL();
-    uint32_t ts_base = g_time_base_ts;
+    uint32_t ts_base    = g_time_base_ts;
     uint32_t ts_base_ms = g_time_base_ms;
     taskEXIT_CRITICAL();
 
@@ -518,7 +520,7 @@ void update_lock_screen_clock(void)
         time_t sntp_now = time(NULL);
         if (sntp_now > 1700000000)
         {
-            ts_base = (uint32_t)sntp_now;
+            ts_base    = (uint32_t) sntp_now;
             ts_base_ms = rtos_time_get_current_system_time_ms();
             taskENTER_CRITICAL();
             g_time_base_ts = ts_base;
@@ -531,36 +533,36 @@ void update_lock_screen_clock(void)
         }
     }
 
-    uint32_t now_ms = rtos_time_get_current_system_time_ms();
-    uint32_t elapsed_s = (now_ms - ts_base_ms) / 1000;
+    uint32_t now_ms     = rtos_time_get_current_system_time_ms();
+    uint32_t elapsed_s  = (now_ms - ts_base_ms) / 1000;
     uint32_t current_ts = ts_base + elapsed_s + UTC8_OFFSET_SEC;
 
     /* If this is the first valid time and sweep hasn't been done,
      * start the sweep animation now instead of directly setting hands. */
     if (!g_sweep_done)
     {
-        uint16_t yr; uint8_t mo, da, hr, mi, se;
+        uint16_t yr;
+        uint8_t  mo, da, hr, mi, se;
         unix_to_datetime(current_ts, &yr, &mo, &da, &hr, &mi, &se);
 
-        int t_sec = (int)se * 6;
-        int t_min = (int)mi * 6;
-        int t_hour = (int)(hr % 12) * 30 + (int)(mi / 2);
+        int t_sec  = (int) se * 6;
+        int t_min  = (int) mi * 6;
+        int t_hour = (int) (hr % 12) * 30 + (int) (mi / 2);
 
         g_lock_last_second = current_ts;
 
         /* Set initial date */
         {
-            static const char* dow[] = { "Sun", "Mon", "Tue", "Wed",
-                                        "Thu", "Fri", "Sat" };
-            int wd = calc_weekday((int)yr, (int)mo, (int)da);
-            char d_buf[8];
-            char w_buf[8];
-            snprintf(d_buf, sizeof(d_buf), "%02u", (unsigned)da);
+            static const char* dow[] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+            int                wd    = calc_weekday((int) yr, (int) mo, (int) da);
+            char               d_buf[8];
+            char               w_buf[8];
+            snprintf(d_buf, sizeof(d_buf), "%02u", (unsigned) da);
             snprintf(w_buf, sizeof(w_buf), "%s", dow[wd]);
             lv_label_set_text(g_date_label, d_buf);
             lv_label_set_text(g_week_label, w_buf);
         }
-        g_last_day = (int)da;
+        g_last_day = (int) da;
 
         start_sweep_animation(t_sec, t_min, t_hour);
         return;
@@ -571,12 +573,13 @@ void update_lock_screen_clock(void)
         return;
     g_lock_last_second = current_ts;
 
-    uint16_t yr; uint8_t mo, da, hr, mi, se;
+    uint16_t yr;
+    uint8_t  mo, da, hr, mi, se;
     unix_to_datetime(current_ts, &yr, &mo, &da, &hr, &mi, &se);
 
-    int t_sec = (int)se * 6;
-    int t_min = (int)mi * 6;
-    int t_hour = (int)(hr % 12) * 30 + (int)(mi / 2);
+    int t_sec  = (int) se * 6;
+    int t_min  = (int) mi * 6;
+    int t_hour = (int) (hr % 12) * 30 + (int) (mi / 2);
 
     set_hand_angle(g_pts_sec, HAND_SEC_LEN, t_sec);
     lv_line_set_points(g_hand_sec, g_pts_sec, 2);
@@ -586,18 +589,17 @@ void update_lock_screen_clock(void)
     lv_line_set_points(g_hand_hour, g_pts_hour, 2);
 
     /* Update date at midnight boundary */
-    if ((int)da != g_last_day)
+    if ((int) da != g_last_day)
     {
-        static const char* dow[] = { "Sun", "Mon", "Tue", "Wed",
-                                    "Thu", "Fri", "Sat" };
-        int wd = calc_weekday((int)yr, (int)mo, (int)da);
-        char d_buf[8];
-        char w_buf[8];
-        snprintf(d_buf, sizeof(d_buf), "%02u", (unsigned)da);
+        static const char* dow[] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+        int                wd    = calc_weekday((int) yr, (int) mo, (int) da);
+        char               d_buf[8];
+        char               w_buf[8];
+        snprintf(d_buf, sizeof(d_buf), "%02u", (unsigned) da);
         snprintf(w_buf, sizeof(w_buf), "%s", dow[wd]);
         lv_label_set_text(g_date_label, d_buf);
         lv_label_set_text(g_week_label, w_buf);
-        g_last_day = (int)da;
+        g_last_day = (int) da;
     }
 
     /*
@@ -614,9 +616,9 @@ void update_lock_screen_clock(void)
      * original clock432.data is in SPI flash, mapped uncacheable on this
      * platform, so reading from flash misses the D-cache entirely.       */
     {
-        const volatile uint8_t* p = (const volatile uint8_t*)s_img_ram.data;
-        uint32_t sz = clock432.data_size;
-        volatile uint8_t warm __attribute__((unused)) = 0;
+        const volatile uint8_t* p                            = (const volatile uint8_t*) s_img_ram.data;
+        uint32_t                sz                           = clock432.data_size;
+        volatile uint8_t        warm __attribute__((unused)) = 0;
         for (uint32_t i = 0; i < sz; i += 32)
             warm += p[i];
     }
@@ -653,7 +655,7 @@ void update_lock_screen_clock(void)
 
 static void unlock_fade_cb(void* var, int32_t v)
 {
-    lv_obj_set_style_opa((lv_obj_t*)var, (lv_opa_t)v, 0);
+    lv_obj_set_style_opa((lv_obj_t*) var, (lv_opa_t) v, 0);
 }
 
 static void unlock_fade_ready_cb(lv_anim_t* a)
@@ -666,19 +668,19 @@ static void unlock_fade_ready_cb(lv_anim_t* a)
         g_lock_container = NULL;
     }
 
-    g_hand_hour = NULL;
-    g_hand_min = NULL;
-    g_hand_sec = NULL;
+    g_hand_hour   = NULL;
+    g_hand_min    = NULL;
+    g_hand_sec    = NULL;
     g_date_window = NULL;
-    g_date_label = NULL;
-    g_week_label = NULL;
-    g_animating = false;
+    g_date_label  = NULL;
+    g_week_label  = NULL;
+    g_animating   = false;
 
     /* Reset hand points to 12 o'clock so the next create starts clean */
-    g_pts_sec[1].x = LOCAL_CENTER_X;
-    g_pts_sec[1].y = LOCAL_CENTER_Y - HAND_SEC_LEN;
-    g_pts_min[1].x = LOCAL_CENTER_X;
-    g_pts_min[1].y = LOCAL_CENTER_Y - HAND_MIN_LEN;
+    g_pts_sec[1].x  = LOCAL_CENTER_X;
+    g_pts_sec[1].y  = LOCAL_CENTER_Y - HAND_SEC_LEN;
+    g_pts_min[1].x  = LOCAL_CENTER_X;
+    g_pts_min[1].y  = LOCAL_CENTER_Y - HAND_MIN_LEN;
     g_pts_hour[1].x = LOCAL_CENTER_X;
     g_pts_hour[1].y = LOCAL_CENTER_Y - HAND_HOUR_LEN;
 
@@ -714,7 +716,7 @@ void start_unlock_transition(void)
  * ======================================================================== */
 void destroy_lock_screen_clock(void)
 {
-    g_animating = false;   /* allow subsequent create to run cleanly */
+    g_animating = false; /* allow subsequent create to run cleanly */
 
     if (g_lock_container != NULL)
     {
@@ -723,20 +725,20 @@ void destroy_lock_screen_clock(void)
     }
 
     g_hand_hour = NULL;
-    g_hand_min = NULL;
-    g_hand_sec = NULL;
+    g_hand_min  = NULL;
+    g_hand_sec  = NULL;
 
     /* Reset hand points to 12 o'clock so the next create starts clean */
-    g_pts_sec[1].x = LOCAL_CENTER_X;
-    g_pts_sec[1].y = LOCAL_CENTER_Y - HAND_SEC_LEN;
-    g_pts_min[1].x = LOCAL_CENTER_X;
-    g_pts_min[1].y = LOCAL_CENTER_Y - HAND_MIN_LEN;
+    g_pts_sec[1].x  = LOCAL_CENTER_X;
+    g_pts_sec[1].y  = LOCAL_CENTER_Y - HAND_SEC_LEN;
+    g_pts_min[1].x  = LOCAL_CENTER_X;
+    g_pts_min[1].y  = LOCAL_CENTER_Y - HAND_MIN_LEN;
     g_pts_hour[1].x = LOCAL_CENTER_X;
     g_pts_hour[1].y = LOCAL_CENTER_Y - HAND_HOUR_LEN;
 
     /* Restore watermark */
     theme_watermark_show(true);
     g_date_window = NULL;
-    g_date_label = NULL;
-    g_week_label = NULL;
+    g_date_label  = NULL;
+    g_week_label  = NULL;
 }

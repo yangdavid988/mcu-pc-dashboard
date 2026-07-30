@@ -3,7 +3,8 @@
 #pragma once
 #include <stdint.h>
 
-typedef struct {
+typedef struct
+{
     float cpu_pct;           // CPU usage threshold (%)            default: 80.0
     float cpu_temp_c;        // CPU temperature threshold (°C)     default: 70.0
     float ram_pct;           // RAM usage threshold (%)            default: 80.0
@@ -15,31 +16,31 @@ typedef struct {
 } flash_threshold_t;
 
 /* SHT3X update threshold — ignore tiny fluctuations to avoid unnecessary refreshes */
-#define SHT3X_THRESHOLD_TEMP_C     0.5f   /* °C, default: ±0.5°C */
-#define SHT3X_THRESHOLD_HUMI_PCT   5.0f   /* %RH, default: ±5% */
+#define SHT3X_THRESHOLD_TEMP_C   0.5f /* °C, default: ±0.5°C */
+#define SHT3X_THRESHOLD_HUMI_PCT 5.0f /* %RH, default: ±5% */
 
 /* ========================================================================
  * Backlight brightness control
  * ======================================================================== */
 
 /** Master enable: 0 = always 100 %, 1 = allow dimming in standby */
-#define BRIGHTNESS_ENABLED          1
+#define BRIGHTNESS_ENABLED 1
 
 /** Standby brightness (0..100).  20 = dim in clock UI */
-#define BRIGHTNESS_STANDBY_PCT      20
+#define BRIGHTNESS_STANDBY_PCT 20
 
 /** Normal brightness (0..100).  100 = full brightness in monitor UI */
-#define BRIGHTNESS_NORMAL_PCT       100
+#define BRIGHTNESS_NORMAL_PCT 100
 
 #ifndef FLASH_THRESHOLD_EXTERNAL
 static const flash_threshold_t g_flash_threshold = {
-    .cpu_pct = 80.0f,
-    .cpu_temp_c = 80.0f,
-    .ram_pct = 80.0f,
-    .disk_pct = 90.0f,
-    .gpu_pct = 80.0f,
-    .bat_low_pct = 20.0f,
-    .env_temp_c = 35.0f,
+    .cpu_pct           = 80.0f,
+    .cpu_temp_c        = 80.0f,
+    .ram_pct           = 80.0f,
+    .disk_pct          = 90.0f,
+    .gpu_pct           = 80.0f,
+    .bat_low_pct       = 20.0f,
+    .env_temp_c        = 35.0f,
     .flash_interval_ms = 150,
 };
 #else

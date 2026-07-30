@@ -9,8 +9,8 @@
 #endif
 
 /* ===== Debounce / long-press time windows ===== */
-#define GPIO_DEBOUNCE_MS        250
-#define BRIGHTNESS_LONG_MS      2000    /* hold ≥ 2 s → jump to min / max */
+#define GPIO_DEBOUNCE_MS   250
+#define BRIGHTNESS_LONG_MS 2000 /* hold ≥ 2 s → jump to min / max */
 
 /*
  * ISR-safe timestamp: use SDK wrapper which internally selects
@@ -28,11 +28,11 @@ static gpio_irq_t gpio_theme;
 
 /* ===== Deferred switch flags (ISR sets flags, LVGL timer processes them) ===== */
 static volatile bool g_pending_layout_switch = false;
-static volatile bool g_pending_theme_switch = false;
+static volatile bool g_pending_theme_switch  = false;
 
 /* ===== ISR debounce timestamps (volatile: written in ISR, read in ISR) ===== */
 static volatile uint32_t g_last_layout_ms = 0;
-static volatile uint32_t g_last_theme_ms = 0;
+static volatile uint32_t g_last_theme_ms  = 0;
 
 /* ========================================================================
  * Brightness buttons — pin mapping depends on platform
@@ -41,33 +41,33 @@ static volatile uint32_t g_last_theme_ms = 0;
 /* DBL070: PB_15 = up, PB_17 = down
  * ST7262: PA_21 = up, PA_27 = down */
 #ifdef USE_DBL070
-#  define BL_UP_PIN     _PB_15
-#  define BL_DOWN_PIN   _PB_17
+#define BL_UP_PIN   _PB_15
+#define BL_DOWN_PIN _PB_17
 #else
-#  define BL_UP_PIN     _PA_21
-#  define BL_DOWN_PIN   _PA_27
+#define BL_UP_PIN   _PA_21
+#define BL_DOWN_PIN _PA_27
 #endif
 
 static gpio_irq_t gpio_bl_up;
 static gpio_irq_t gpio_bl_down;
 
-static volatile bool     g_pending_bl_up   = false;
-static volatile bool     g_pending_bl_down = false;
-static volatile uint32_t g_bl_up_press_ms  = 0;
+static volatile bool     g_pending_bl_up    = false;
+static volatile bool     g_pending_bl_down  = false;
+static volatile uint32_t g_bl_up_press_ms   = 0;
 static volatile uint32_t g_bl_down_press_ms = 0;
 
 /* ========================================================================
  * OSD state
  * ======================================================================== */
-static lv_obj_t *g_osd = NULL;
-static lv_obj_t *g_osd_bar = NULL;
-static lv_obj_t *g_osd_label = NULL;
+static lv_obj_t* g_osd       = NULL;
+static lv_obj_t* g_osd_bar   = NULL;
+static lv_obj_t* g_osd_label = NULL;
 
 /* ===== Layout switch ISR ===== */
 static void layout_irq_handler(uint32_t id, uint32_t event)
 {
-    (void)id;
-    (void)event;
+    (void) id;
+    (void) event;
 
     uint32_t now = isr_safe_tick_ms();
 
@@ -82,8 +82,8 @@ static void layout_irq_handler(uint32_t id, uint32_t event)
 /* ===== Theme switch ISR ===== */
 static void theme_irq_handler(uint32_t id, uint32_t event)
 {
-    (void)id;
-    (void)event;
+    (void) id;
+    (void) event;
 
     uint32_t now = isr_safe_tick_ms();
 
@@ -100,8 +100,8 @@ static void theme_irq_handler(uint32_t id, uint32_t event)
  * ======================================================================== */
 static void bl_up_irq_handler(uint32_t id, uint32_t event)
 {
-    (void)id;
-    (void)event;
+    (void) id;
+    (void) event;
     g_bl_up_press_ms = isr_safe_tick_ms();
     g_pending_bl_up  = true;
 }
@@ -111,8 +111,8 @@ static void bl_up_irq_handler(uint32_t id, uint32_t event)
  * ======================================================================== */
 static void bl_down_irq_handler(uint32_t id, uint32_t event)
 {
-    (void)id;
-    (void)event;
+    (void) id;
+    (void) event;
     g_bl_down_press_ms = isr_safe_tick_ms();
     g_pending_bl_down  = true;
 }
@@ -121,21 +121,21 @@ static void bl_down_irq_handler(uint32_t id, uint32_t event)
  * Brightness OSD — transient overlay at bottom-centre
  * ======================================================================== */
 
-static void osd_fadeout_cb(lv_anim_t *a)
+static void osd_fadeout_cb(lv_anim_t* a)
 {
     LV_UNUSED(a);
     if (g_osd != NULL)
     {
         lv_obj_delete(g_osd);
-        g_osd = NULL;
-        g_osd_bar = NULL;
+        g_osd       = NULL;
+        g_osd_bar   = NULL;
         g_osd_label = NULL;
     }
 }
 
-static void osd_fadein_cb(void *var, int32_t v)
+static void osd_fadein_cb(void* var, int32_t v)
 {
-    lv_obj_set_style_opa((lv_obj_t *)var, (lv_opa_t)v, 0);
+    lv_obj_set_style_opa((lv_obj_t*) var, (lv_opa_t) v, 0);
 }
 
 void brightness_osd_show(int percent)
@@ -148,7 +148,7 @@ void brightness_osd_show(int percent)
         g_osd = NULL;
     }
 
-    lv_obj_t *scr = lv_scr_act();
+    lv_obj_t* scr = lv_scr_act();
 
     /* ---- Container: rounded panel at bottom centre ---- */
     g_osd = lv_obj_create(scr);
@@ -163,7 +163,7 @@ void brightness_osd_show(int percent)
 
     /* ---- Icon + percent label ---- */
     g_osd_label = lv_label_create(g_osd);
-    lv_label_set_text_fmt(g_osd_label, "%d %%", (int)percent);
+    lv_label_set_text_fmt(g_osd_label, "%d %%", (int) percent);
     lv_obj_set_style_text_color(g_osd_label, lv_color_make(0xFF, 0xFF, 0xFF), 0);
     lv_obj_set_style_text_font(g_osd_label, &lv_font_montserrat_14, 0);
     lv_obj_align(g_osd_label, LV_ALIGN_LEFT_MID, 10, 0);
@@ -173,7 +173,7 @@ void brightness_osd_show(int percent)
     lv_obj_set_size(g_osd_bar, 90, 6);
     lv_obj_align(g_osd_bar, LV_ALIGN_RIGHT_MID, -10, 0);
     lv_bar_set_range(g_osd_bar, 0, 100);
-    lv_bar_set_value(g_osd_bar, (int)percent, LV_ANIM_OFF);
+    lv_bar_set_value(g_osd_bar, (int) percent, LV_ANIM_OFF);
     lv_obj_set_style_radius(g_osd_bar, 3, 0);
     lv_obj_set_style_bg_color(g_osd_bar, lv_color_make(0x44, 0x44, 0x44), 0);
     lv_obj_set_style_bg_opa(g_osd_bar, LV_OPA_COVER, 0);
@@ -221,9 +221,8 @@ void gpio_control_process(void)
     if (g_pending_layout_switch && layout_is_created())
     {
         g_pending_layout_switch = false;
-        layout_id_t next_id = (g_layout_id + 1) % LAYOUT_MAX;
-        RTK_LOGI(TAG, "DEFERRED layout_switch -> %s\n",
-            layout_get_name(next_id));
+        layout_id_t next_id     = (g_layout_id + 1) % LAYOUT_MAX;
+        RTK_LOGI(TAG, "DEFERRED layout_switch -> %s\n", layout_get_name(next_id));
         layout_switch(next_id);
     }
 
@@ -231,9 +230,8 @@ void gpio_control_process(void)
     if (g_pending_theme_switch && layout_is_created())
     {
         g_pending_theme_switch = false;
-        theme_id_t next_id = (g_theme_id + 1) % THEME_MAX;
-        RTK_LOGI(TAG, "DEFERRED theme_switch -> %s\n",
-            theme_get_name(next_id));
+        theme_id_t next_id     = (g_theme_id + 1) % THEME_MAX;
+        RTK_LOGI(TAG, "DEFERRED theme_switch -> %s\n", theme_get_name(next_id));
         theme_switch(next_id);
     }
 
@@ -241,7 +239,7 @@ void gpio_control_process(void)
     if (g_pending_bl_up)
     {
         uint32_t elapsed = isr_safe_tick_ms() - g_bl_up_press_ms;
-        bool held = (GPIO_ReadDataBit(BL_UP_PIN) == 0);   /* active low with pull-up */
+        bool     held    = (GPIO_ReadDataBit(BL_UP_PIN) == 0); /* active low with pull-up */
 
         if (held && elapsed >= BRIGHTNESS_LONG_MS)
         {
@@ -264,7 +262,7 @@ void gpio_control_process(void)
     if (g_pending_bl_down)
     {
         uint32_t elapsed = isr_safe_tick_ms() - g_bl_down_press_ms;
-        bool held = (GPIO_ReadDataBit(BL_DOWN_PIN) == 0);
+        bool     held    = (GPIO_ReadDataBit(BL_DOWN_PIN) == 0);
 
         if (held && elapsed >= BRIGHTNESS_LONG_MS)
         {
@@ -310,9 +308,9 @@ void gpio_control_init(void)
 #endif
 
     /* ---- Brightness +/- buttons ---- */
-    gpio_irq_init(&gpio_bl_up,   BL_UP_PIN,   bl_up_irq_handler,   0);
-    gpio_irq_pull_ctrl(&gpio_bl_up,   PullUp);
-    gpio_irq_set(&gpio_bl_up,   IRQ_FALL, 1);
+    gpio_irq_init(&gpio_bl_up, BL_UP_PIN, bl_up_irq_handler, 0);
+    gpio_irq_pull_ctrl(&gpio_bl_up, PullUp);
+    gpio_irq_set(&gpio_bl_up, IRQ_FALL, 1);
     gpio_irq_enable(&gpio_bl_up);
 
     gpio_irq_init(&gpio_bl_down, BL_DOWN_PIN, bl_down_irq_handler, 0);
@@ -320,6 +318,5 @@ void gpio_control_init(void)
     gpio_irq_set(&gpio_bl_down, IRQ_FALL, 1);
     gpio_irq_enable(&gpio_bl_down);
 
-    RTK_LOGI(TAG, "GPIO buttons initialized (bl up=0x%02X down=0x%02X)\n",
-             (unsigned)BL_UP_PIN, (unsigned)BL_DOWN_PIN);
+    RTK_LOGI(TAG, "GPIO buttons initialized (bl up=0x%02X down=0x%02X)\n", (unsigned) BL_UP_PIN, (unsigned) BL_DOWN_PIN);
 }

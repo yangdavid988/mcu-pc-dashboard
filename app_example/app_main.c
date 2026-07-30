@@ -5,39 +5,39 @@
 #include "gpio_control.h"
 #include "WiFi_reconnect.h"
 /* PPE hardware-accelerated draw unit (SDK AmebaGreen2 AG2 driver) */
-//#include "lv_draw_ppe.h"
+// #include "lv_draw_ppe.h"
 #include "FreeRTOS.h"
 #include "task.h"
-#include "ameba_pmu.h"      /* pmu_acquire_wakelock */
-#include "drv/lcd/lcdc_core.h"   /* lcdc_core_flush_commit */
+#include "ameba_pmu.h"         /* pmu_acquire_wakelock */
+#include "drv/lcd/lcdc_core.h" /* lcdc_core_flush_commit */
 
 /* PMU device ID for LCDC — hold wakelock during LVGL operation to prevent
  * tickless idle from gating LCDC clock (LCDC is SOC domain, cannot wake CPU). */
-#define PMU_LCDC_DEVICE      PMU_OS
+#define PMU_LCDC_DEVICE PMU_OS
 
 #ifndef TAG
-#define TAG     "APP_MAIN"
+#define TAG "APP_MAIN"
 #endif
 
- /* ========================================================================
-  * Fast flash — driven by LVGL timer, aligned with render cycle
-  * ======================================================================== */
-  /* FAST_FLASH_MS now comes from threshold_config.h: g_flash_threshold.flash_interval_ms */
+/* ========================================================================
+ * Fast flash — driven by LVGL timer, aligned with render cycle
+ * ======================================================================== */
+/* FAST_FLASH_MS now comes from threshold_config.h: g_flash_threshold.flash_interval_ms */
 
-  /* LVGL thread parameters */
+/* LVGL thread parameters */
 #ifndef TASK_STACK_LVGL
-#define TASK_STACK_LVGL         8192
+#define TASK_STACK_LVGL 8192
 #endif
 #ifndef TASK_PRIO_LVGL
-#define TASK_PRIO_LVGL          (tskIDLE_PRIORITY + 3)
+#define TASK_PRIO_LVGL (tskIDLE_PRIORITY + 3)
 #endif
 
 /* WiFi connection thread parameters */
 #ifndef TASK_STACK_WIFI
-#define TASK_STACK_WIFI         2048
+#define TASK_STACK_WIFI 2048
 #endif
 #ifndef TASK_PRIO_WIFI
-#define TASK_PRIO_WIFI          (tskIDLE_PRIORITY)
+#define TASK_PRIO_WIFI (tskIDLE_PRIORITY)
 #endif
 
 /* ========================================================================
@@ -62,10 +62,9 @@ uint16_t lcd_h = SCREEN_HEIGHT;
  * ======================================================================== */
 static void lvgl_main_thread(void* parameters)
 {
-    (void)parameters;
+    (void) parameters;
 
-    RTK_LOGS(TAG, RTK_LOG_INFO,
-        "\r\n=== PC Dashboard ===\r\n");
+    RTK_LOGS(TAG, RTK_LOG_INFO, "\r\n=== PC Dashboard ===\r\n");
 
     /* LCD initialization */
     lcd_init();
@@ -79,10 +78,9 @@ static void lvgl_main_thread(void* parameters)
     {
         uint32_t fb1, fb2;
         lcd_get_fb_base(&fb1, &fb2);
-        lv_disp_buf1 = (u8*)fb1;
-        lv_disp_buf2 = (u8*)fb2;
-        RTK_LOGI(TAG, "FB base1=0x%08lX base2=0x%08lX driver=%s\n",
-            (unsigned long)fb1, (unsigned long)fb2, lcd_get_driver_name());
+        lv_disp_buf1 = (u8*) fb1;
+        lv_disp_buf2 = (u8*) fb2;
+        RTK_LOGI(TAG, "FB base1=0x%08lX base2=0x%08lX driver=%s\n", (unsigned long) fb1, (unsigned long) fb2, lcd_get_driver_name());
     }
 
     /* GPIO button initialization */
@@ -99,10 +97,10 @@ static void lvgl_main_thread(void* parameters)
     lv_display_t* display = lv_display_create(lcd_w, lcd_h);
     lv_display_set_flush_cb(display, lvgl_disp_flush);
     lv_display_set_buffers(display,
-        lv_disp_buf1,
-        lv_disp_buf2,           /* Dual-buffer with VBlank page flip to eliminate tearing */
-        LVGL_BUF_SIZE,
-        LV_DISPLAY_RENDER_MODE_DIRECT);
+                           lv_disp_buf1,
+                           lv_disp_buf2, /* Dual-buffer with VBlank page flip to eliminate tearing */
+                           LVGL_BUF_SIZE,
+                           LV_DISPLAY_RENDER_MODE_DIRECT);
 
     /* Create dashboard UI */
     create_dashboard_ui();
@@ -155,17 +153,17 @@ void app_example(void)
     /* Suppress all MQTT-tagged log output (DEBUG packet traces, etc.).
      * rtk_log_write checks per-tag threshold BEFORE calling DiagPrintf;
      * RTK_LOG_NONE makes the check fail for every level.                */
-     //rtk_log_level_set("MQTT", RTK_LOG_NONE);
+    // rtk_log_level_set("MQTT", RTK_LOG_NONE);
 
     RTK_LOGI(TAG, "PC Dashboard started!\r\n");
 
     /* Create LVGL UI thread (high priority for smooth refresh) */
     if (rtos_task_create(NULL,
-        "lvgl_thread",
-        (rtos_task_t)lvgl_main_thread,
-        NULL,
-        TASK_STACK_LVGL,
-        TASK_PRIO_LVGL) != RTK_SUCCESS)
+                         "lvgl_thread",
+                         (rtos_task_t) lvgl_main_thread,
+                         NULL,
+                         TASK_STACK_LVGL,
+                         TASK_PRIO_LVGL) != RTK_SUCCESS)
     {
         RTK_LOGE(TAG, "Create LVGL thread failed!\r\n");
         return;
@@ -173,11 +171,11 @@ void app_example(void)
 
     /* Create WiFi connection task (low priority, exits after connecting) */
     if (rtos_task_create(NULL,
-        "WiFi_connect",
-        (rtos_task_t)WiFi_connect_task,
-        NULL,
-        TASK_STACK_WIFI,
-        TASK_PRIO_WIFI) != RTK_SUCCESS)
+                         "WiFi_connect",
+                         (rtos_task_t) WiFi_connect_task,
+                         NULL,
+                         TASK_STACK_WIFI,
+                         TASK_PRIO_WIFI) != RTK_SUCCESS)
     {
         RTK_LOGE(TAG, "Create WiFi connect task failed!\r\n");
     }

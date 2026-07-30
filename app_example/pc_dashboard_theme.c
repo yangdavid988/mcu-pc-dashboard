@@ -12,70 +12,69 @@
  * Global state
  * ======================================================================== */
 layout_id_t g_layout_id = DEFAULT_LAYOUT;
-theme_id_t  g_theme_id = DEFAULT_THEME;
+theme_id_t  g_theme_id  = DEFAULT_THEME;
 
 /* ========================================================================
  * Theme color tables
  * ======================================================================== */
 
- /* --- COBALT: Intel Blue --- */
+/* --- COBALT: Intel Blue --- */
 
-const theme_t g_themes[THEME_MAX] =
-{
+const theme_t g_themes[THEME_MAX] = {
     /* THEME_COBALT */
     {
-        .name = THEME_NAME_COBALT,
-        .cpu = LV_COLOR_MAKE(0x00, 0x88, 0xFF),
-        .ram = LV_COLOR_MAKE(0xFF, 0x88, 0x00),
-        .disk = LV_COLOR_MAKE(0xFF, 0x55, 0x55),
-        .batt = LV_COLOR_MAKE(0x44, 0xDD, 0x44),
-        .gpu = LV_COLOR_MAKE(0xBB, 0x44, 0xEE),
-        .io = LV_COLOR_MAKE(0x22, 0xBB, 0xCC),
-        .net = LV_COLOR_MAKE(0x00, 0xCC, 0x88),
-        .sys = LV_COLOR_MAKE(0x88, 0x88, 0xFF),
-        .header = LV_COLOR_MAKE(0x00, 0xCC, 0xFF),
-        .env = LV_COLOR_MAKE(0x44, 0xEE, 0x88),
-        .bg_top = LV_COLOR_MAKE(0x0E, 0x0E, 0x28),
-        .bg_bot = LV_COLOR_MAKE(0x06, 0x06, 0x16),
-        .warn = LV_COLOR_MAKE(0xFF, 0x44, 0x44),
+        .name     = THEME_NAME_COBALT,
+        .cpu      = LV_COLOR_MAKE(0x00, 0x88, 0xFF),
+        .ram      = LV_COLOR_MAKE(0xFF, 0x88, 0x00),
+        .disk     = LV_COLOR_MAKE(0xFF, 0x55, 0x55),
+        .batt     = LV_COLOR_MAKE(0x44, 0xDD, 0x44),
+        .gpu      = LV_COLOR_MAKE(0xBB, 0x44, 0xEE),
+        .io       = LV_COLOR_MAKE(0x22, 0xBB, 0xCC),
+        .net      = LV_COLOR_MAKE(0x00, 0xCC, 0x88),
+        .sys      = LV_COLOR_MAKE(0x88, 0x88, 0xFF),
+        .header   = LV_COLOR_MAKE(0x00, 0xCC, 0xFF),
+        .env      = LV_COLOR_MAKE(0x44, 0xEE, 0x88),
+        .bg_top   = LV_COLOR_MAKE(0x0E, 0x0E, 0x28),
+        .bg_bot   = LV_COLOR_MAKE(0x06, 0x06, 0x16),
+        .warn     = LV_COLOR_MAKE(0xFF, 0x44, 0x44),
         .bg_image = &bg_cobalt,
     },
 
     /* THEME_INFERNO */
     {
-        .name = THEME_NAME_INFERNO,
-        .cpu = LV_COLOR_MAKE(0xFF, 0x33, 0x33),
-        .ram = LV_COLOR_MAKE(0xFF, 0x66, 0x33),
-        .disk = LV_COLOR_MAKE(0xCC, 0x44, 0x44),
-        .batt = LV_COLOR_MAKE(0xFF, 0x99, 0x33),
-        .gpu = LV_COLOR_MAKE(0xDD, 0x33, 0x55),
-        .io = LV_COLOR_MAKE(0xDD, 0x66, 0x44),
-        .net = LV_COLOR_MAKE(0xEE, 0x77, 0x33),
-        .sys = LV_COLOR_MAKE(0xCC, 0x55, 0x55),
-        .header = LV_COLOR_MAKE(0xFF, 0x44, 0x44),
-        .env = LV_COLOR_MAKE(0xFF, 0x88, 0x33),
-        .bg_top = LV_COLOR_MAKE(0x1A, 0x0A, 0x0A),
-        .bg_bot = LV_COLOR_MAKE(0x0E, 0x05, 0x05),
-        .warn = LV_COLOR_MAKE(0xFF, 0x66, 0x66),
+        .name     = THEME_NAME_INFERNO,
+        .cpu      = LV_COLOR_MAKE(0xFF, 0x33, 0x33),
+        .ram      = LV_COLOR_MAKE(0xFF, 0x66, 0x33),
+        .disk     = LV_COLOR_MAKE(0xCC, 0x44, 0x44),
+        .batt     = LV_COLOR_MAKE(0xFF, 0x99, 0x33),
+        .gpu      = LV_COLOR_MAKE(0xDD, 0x33, 0x55),
+        .io       = LV_COLOR_MAKE(0xDD, 0x66, 0x44),
+        .net      = LV_COLOR_MAKE(0xEE, 0x77, 0x33),
+        .sys      = LV_COLOR_MAKE(0xCC, 0x55, 0x55),
+        .header   = LV_COLOR_MAKE(0xFF, 0x44, 0x44),
+        .env      = LV_COLOR_MAKE(0xFF, 0x88, 0x33),
+        .bg_top   = LV_COLOR_MAKE(0x1A, 0x0A, 0x0A),
+        .bg_bot   = LV_COLOR_MAKE(0x0E, 0x05, 0x05),
+        .warn     = LV_COLOR_MAKE(0xFF, 0x66, 0x66),
         .bg_image = &bg_inferno,
     },
 
     /* THEME_SILICON */
     {
-        .name = THEME_NAME_SILICON,
-        .cpu = LV_COLOR_MAKE(0x8A, 0x8A, 0xB0),
-        .ram = LV_COLOR_MAKE(0xA0, 0xA0, 0xBB),
-        .disk = LV_COLOR_MAKE(0x88, 0x88, 0xAA),
-        .batt = LV_COLOR_MAKE(0x88, 0xBB, 0x88),
-        .gpu = LV_COLOR_MAKE(0x99, 0x66, 0xCC),
-        .io = LV_COLOR_MAKE(0x66, 0xAA, 0xBB),
-        .net = LV_COLOR_MAKE(0x66, 0xBB, 0x99),
-        .sys = LV_COLOR_MAKE(0x99, 0x99, 0xCC),
-        .header = LV_COLOR_MAKE(0xA0, 0xA0, 0xC0),
-        .env = LV_COLOR_MAKE(0x88, 0xCC, 0xAA),
-        .bg_top = LV_COLOR_MAKE(0x1A, 0x1A, 0x24),
-        .bg_bot = LV_COLOR_MAKE(0x0E, 0x0E, 0x16),
-        .warn = LV_COLOR_MAKE(0xCC, 0x44, 0x44),
+        .name     = THEME_NAME_SILICON,
+        .cpu      = LV_COLOR_MAKE(0x8A, 0x8A, 0xB0),
+        .ram      = LV_COLOR_MAKE(0xA0, 0xA0, 0xBB),
+        .disk     = LV_COLOR_MAKE(0x88, 0x88, 0xAA),
+        .batt     = LV_COLOR_MAKE(0x88, 0xBB, 0x88),
+        .gpu      = LV_COLOR_MAKE(0x99, 0x66, 0xCC),
+        .io       = LV_COLOR_MAKE(0x66, 0xAA, 0xBB),
+        .net      = LV_COLOR_MAKE(0x66, 0xBB, 0x99),
+        .sys      = LV_COLOR_MAKE(0x99, 0x99, 0xCC),
+        .header   = LV_COLOR_MAKE(0xA0, 0xA0, 0xC0),
+        .env      = LV_COLOR_MAKE(0x88, 0xCC, 0xAA),
+        .bg_top   = LV_COLOR_MAKE(0x1A, 0x1A, 0x24),
+        .bg_bot   = LV_COLOR_MAKE(0x0E, 0x0E, 0x16),
+        .warn     = LV_COLOR_MAKE(0xCC, 0x44, 0x44),
         .bg_image = &bg_silicon,
     },
 };
@@ -94,14 +93,14 @@ const char* layout_get_name(layout_id_t id)
 {
     switch (id)
     {
-    case LAYOUT_TRIAD:
-        return LAYOUT_NAME_TRIAD;
-    case LAYOUT_VORTEX:
-        return LAYOUT_NAME_VORTEX;
-    case LAYOUT_PULSE:
-        return LAYOUT_NAME_PULSE;
-    default:
-        return "UNKNOWN";
+        case LAYOUT_TRIAD:
+            return LAYOUT_NAME_TRIAD;
+        case LAYOUT_VORTEX:
+            return LAYOUT_NAME_VORTEX;
+        case LAYOUT_PULSE:
+            return LAYOUT_NAME_PULSE;
+        default:
+            return "UNKNOWN";
     }
 }
 
@@ -109,7 +108,7 @@ const char* layout_get_name(layout_id_t id)
  * Theme / layout switch
  * ======================================================================== */
 
- /* Watermark image (persistent, on TOP of layout as subtle overlay) */
+/* Watermark image (persistent, on TOP of layout as subtle overlay) */
 static lv_obj_t* g_bg_watermark = NULL;
 
 static void theme_watermark_update(void)
@@ -174,19 +173,20 @@ static void theme_apply_background(void)
  * ======================================================================== */
 static layout_id_t s_pending_layout = LAYOUT_MAX;
 static theme_id_t  s_pending_theme  = THEME_MAX;
-static bool        g_switching      = false;    /* Anti-reentry guard */
+static bool        g_switching      = false; /* Anti-reentry guard */
 
 /** Opacity animation callback (lv_anim needs (void*, int32_t) signature) */
 static void anim_set_opa_cb(void* obj, int32_t v)
 {
-    lv_obj_set_style_opa((lv_obj_t*)obj, (lv_opa_t)v, 0);
+    lv_obj_set_style_opa((lv_obj_t*) obj, (lv_opa_t) v, 0);
 }
 
 /** Fade in new container (200ms) */
 static void anim_fade_in(void)
 {
     lv_obj_t* cont = layout_get_container();
-    if (!cont) return;
+    if (!cont)
+        return;
     lv_obj_set_style_opa(cont, LV_OPA_TRANSP, 0);
     lv_anim_t a;
     lv_anim_init(&a);
@@ -200,49 +200,65 @@ static void anim_fade_in(void)
 /** Fade-out complete callback: perform actual switch, then fade in new layout */
 static void switch_ready_cb(lv_anim_t* a)
 {
-    (void)a;
+    (void) a;
     g_switching = false;
 
     if (s_pending_layout < LAYOUT_MAX)
     {
         layout_id_t new_lo = s_pending_layout;
-        s_pending_layout = LAYOUT_MAX;
+        s_pending_layout   = LAYOUT_MAX;
 
         destroy_current_layout();
         g_layout_id = new_lo;
         theme_apply_background();
         switch (g_layout_id)
         {
-        case LAYOUT_TRIAD:  create_layout_triad(lv_scr_act());  break;
-        case LAYOUT_VORTEX: create_layout_vortex(lv_scr_act()); break;
-        case LAYOUT_PULSE:  create_layout_pulse(lv_scr_act());  break;
-        default: break;
+            case LAYOUT_TRIAD:
+                create_layout_triad(lv_scr_act());
+                break;
+            case LAYOUT_VORTEX:
+                create_layout_vortex(lv_scr_act());
+                break;
+            case LAYOUT_PULSE:
+                create_layout_pulse(lv_scr_act());
+                break;
+            default:
+                break;
         }
         /* Set new container transparent immediately to prevent rendering one frame before fade-in */
         lv_obj_set_style_opa(layout_get_container(), LV_OPA_TRANSP, 0);
         theme_watermark_update();
         notify_layout_switched();
-        if (layout_is_created()) update_current_layout();
+        if (layout_is_created())
+            update_current_layout();
     }
     else if (s_pending_theme < THEME_MAX)
     {
         theme_id_t new_th = s_pending_theme;
-        s_pending_theme = THEME_MAX;
+        s_pending_theme   = THEME_MAX;
 
         destroy_current_layout();
         g_theme_id = new_th;
         theme_apply_background();
         switch (g_layout_id)
         {
-        case LAYOUT_TRIAD:  create_layout_triad(lv_scr_act());  break;
-        case LAYOUT_VORTEX: create_layout_vortex(lv_scr_act()); break;
-        case LAYOUT_PULSE:  create_layout_pulse(lv_scr_act());  break;
-        default: break;
+            case LAYOUT_TRIAD:
+                create_layout_triad(lv_scr_act());
+                break;
+            case LAYOUT_VORTEX:
+                create_layout_vortex(lv_scr_act());
+                break;
+            case LAYOUT_PULSE:
+                create_layout_pulse(lv_scr_act());
+                break;
+            default:
+                break;
         }
         lv_obj_set_style_opa(layout_get_container(), LV_OPA_TRANSP, 0);
         theme_watermark_update();
         notify_layout_switched();
-        if (layout_is_created()) update_current_layout();
+        if (layout_is_created())
+            update_current_layout();
     }
     anim_fade_in();
 }
@@ -265,7 +281,8 @@ static void start_fade_out(void)
 
 void theme_watermark_show(bool show)
 {
-    if (g_bg_watermark == NULL) return;
+    if (g_bg_watermark == NULL)
+        return;
     /* Use HIDDEN flag so the watermark is skipped in LVGL rendering
      * (bg_opa=0 alone does NOT suppress bg_image rendering in LVGL 9.3). */
     if (show)
@@ -276,19 +293,21 @@ void theme_watermark_show(bool show)
 
 void layout_switch(layout_id_t layout)
 {
-    if (g_switching) return;    /* Animation in progress, ignore */
-    g_switching = true;
+    if (g_switching)
+        return; /* Animation in progress, ignore */
+    g_switching      = true;
     s_pending_layout = layout;
-    s_pending_theme = THEME_MAX;
+    s_pending_theme  = THEME_MAX;
     RTK_LOGI(TAG, "layout_switch -> %s\n", layout_get_name(layout));
     start_fade_out();
 }
 
 void theme_switch(theme_id_t theme)
 {
-    if (g_switching) return;
-    g_switching = true;
-    s_pending_theme = theme;
+    if (g_switching)
+        return;
+    g_switching      = true;
+    s_pending_theme  = theme;
     s_pending_layout = LAYOUT_MAX;
     RTK_LOGI(TAG, "theme_switch -> %s\n", theme_get_name(theme));
     start_fade_out();

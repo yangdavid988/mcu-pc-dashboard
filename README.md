@@ -23,7 +23,7 @@
 
 The MCU acts as a pure subscriber — it only listens, never publishes.
 
-- 📄 [Chip & module information](https://aiot.realmcu.com/cn/module/index.html)
+- 📄 [Chip & module information](https://aiot.realmcu.com/en/home.html)
 
 ---
 <div align="center">

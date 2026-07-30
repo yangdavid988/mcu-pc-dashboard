@@ -14,13 +14,13 @@
  * Usage: replace SDK LwIP calls with COMPAT_* macros.
  * ======================================================================== */
 #if AMEBA_RTOS_VERSION() >= AMEBA_RTOS_VERSION_VAL(1, 2, 0)
- /* v1.2+ — lowercase naming */
-#define COMPAT_CHECK_CONNECTIVITY(idx)  lwip_check_connectivity(idx)
-#define COMPAT_REQUEST_IP(idx)          lwip_request_ip(idx)
+/* v1.2+ — lowercase naming */
+#define COMPAT_CHECK_CONNECTIVITY(idx) lwip_check_connectivity(idx)
+#define COMPAT_REQUEST_IP(idx)         lwip_request_ip(idx)
 #else
- /* v1.1.x and below — uppercase LwIP_ naming */
-#define COMPAT_CHECK_CONNECTIVITY(idx)  LwIP_Check_Connectivity(idx)
-#define COMPAT_REQUEST_IP(idx)          LwIP_IP_Address_Request(idx)
+/* v1.1.x and below — uppercase LwIP_ naming */
+#define COMPAT_CHECK_CONNECTIVITY(idx) LwIP_Check_Connectivity(idx)
+#define COMPAT_REQUEST_IP(idx)         LwIP_IP_Address_Request(idx)
 #endif
 
 #endif /* _SDK_COMPAT_H_ */
