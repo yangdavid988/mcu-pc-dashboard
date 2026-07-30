@@ -6,47 +6,45 @@
 /* NOTE: SDK lwipopts.h already maps SNTP_UPDATE_DELAY to sntp_get_update_interval(),
    so the interval is controlled at runtime via sntp_set_update_interval(). */
 #include "lwip/apps/sntp.h"
-   /* Realtek SNTP component (time-of-day thin wrapper, provides set_update_interval) */
+/* Realtek SNTP component (time-of-day thin wrapper, provides set_update_interval) */
 #include "sntp/sntp_api.h"
 
 /* ========================================================================
  * Global variables
  * ======================================================================== */
-PC_Stats_t      g_pc_stats = { 0 };
-volatile bool   g_new_data_ready = false;
-volatile bool   g_sht3x_pending = false;
-volatile bool   g_mqtt_connected = false;
+PC_Stats_t        g_pc_stats       = { 0 };
+volatile bool     g_new_data_ready = false;
+volatile bool     g_sht3x_pending  = false;
+volatile bool     g_mqtt_connected = false;
 volatile uint32_t g_data_last_tick = 0;
 
-
 /* Internal globals */
-static MQTTClient          g_mqtt_client;
-static rtos_task_t         g_mqtt_task_handle = NULL;
-static bool                g_sht3x_subscribed = false;   /* Whether SHT3X topic has been subscribed */
-static bool                g_pc_event_subscribed = false;  /* Lock screen event subscription */
+static MQTTClient  g_mqtt_client;
+static rtos_task_t g_mqtt_task_handle    = NULL;
+static bool        g_sht3x_subscribed    = false; /* Whether SHT3X topic has been subscribed */
+static bool        g_pc_event_subscribed = false; /* Lock screen event subscription */
 
 /* Lock screen state */
-volatile ScreenState_t g_screen_state = SCREEN_STATE_MONITOR;
+volatile ScreenState_t g_screen_state       = SCREEN_STATE_MONITOR;
 volatile bool          g_lock_screen_active = false;
-volatile bool          g_pc_event_received = false;  /* first pc/event retained msg processed */
+volatile bool          g_pc_event_received  = false; /* first pc/event retained msg processed */
 
 /* ========================================================================
  * Simple JSON value extractors (flat JSON format)
  * ======================================================================== */
 
- /*
-  * Extract string value: finds "key": "value" pattern
-  * Returns number of characters written to out, or -1 if not found
-  */
-static int json_extract_string(const char* json, const char* key,
-    char* out, size_t out_size)
+/*
+ * Extract string value: finds "key": "value" pattern
+ * Returns number of characters written to out, or -1 if not found
+ */
+static int json_extract_string(const char* json, const char* key, char* out, size_t out_size)
 {
     if (!json || !key || !out || out_size == 0)
         return -1;
 
     char search[64];
-    int key_len = snprintf(search, sizeof(search), "\"%s\"", key);
-    if (key_len <= 0 || (size_t)key_len >= sizeof(search))
+    int  key_len = snprintf(search, sizeof(search), "\"%s\"", key);
+    if (key_len <= 0 || (size_t) key_len >= sizeof(search))
         return -1;
 
     const char* p_key = strstr(json, search);
@@ -77,12 +75,25 @@ static int json_extract_string(const char* json, const char* key,
             p_key++;
             switch (*p_key)
             {
-            case 'n': out[idx++] = '\n'; break;
-            case 't': out[idx++] = '\t'; break;
-            case 'r': out[idx++] = '\r'; break;
-            case '\\': out[idx++] = '\\'; break;
-            case '"':  out[idx++] = '"';  break;
-            default:   out[idx++] = '\\'; out[idx++] = *p_key; break;
+                case 'n':
+                    out[idx++] = '\n';
+                    break;
+                case 't':
+                    out[idx++] = '\t';
+                    break;
+                case 'r':
+                    out[idx++] = '\r';
+                    break;
+                case '\\':
+                    out[idx++] = '\\';
+                    break;
+                case '"':
+                    out[idx++] = '"';
+                    break;
+                default:
+                    out[idx++] = '\\';
+                    out[idx++] = *p_key;
+                    break;
             }
         }
         else
@@ -92,22 +103,21 @@ static int json_extract_string(const char* json, const char* key,
         p_key++;
     }
     out[idx] = '\0';
-    return (int)idx;
+    return (int) idx;
 }
 
 /*
  * Extract numeric value: finds "key": number
  * Returns true on success, false on failure
  */
-static bool json_extract_number(const char* json, const char* key,
-    float* value)
+static bool json_extract_number(const char* json, const char* key, float* value)
 {
     if (!json || !key || !value)
         return false;
 
     char search[64];
-    int key_len = snprintf(search, sizeof(search), "\"%s\"", key);
-    if (key_len <= 0 || (size_t)key_len >= sizeof(search))
+    int  key_len = snprintf(search, sizeof(search), "\"%s\"", key);
+    if (key_len <= 0 || (size_t) key_len >= sizeof(search))
         return false;
 
     const char* p_key = strstr(json, search);
@@ -129,9 +139,9 @@ static bool json_extract_number(const char* json, const char* key,
     if (strncmp(p_key, "null", 4) == 0)
         return false;
     if (*p_key == '"')
-        return false;   /* Value is a string, not a number */
+        return false; /* Value is a string, not a number */
 
-    char num_buf[64];
+    char   num_buf[64];
     size_t idx = 0;
     while (*p_key && idx < sizeof(num_buf) - 1)
     {
@@ -145,7 +155,7 @@ static bool json_extract_number(const char* json, const char* key,
     if (idx == 0)
         return false;
 
-    *value = (float)atof(num_buf);
+    *value = (float) atof(num_buf);
     return true;
 }
 
@@ -153,13 +163,12 @@ static bool json_extract_number(const char* json, const char* key,
  * Extract integer: finds "key": integer
  * Returns true on success, false on failure
  */
-static bool json_extract_int(const char* json, const char* key,
-    int32_t* value)
+static bool json_extract_int(const char* json, const char* key, int32_t* value)
 {
     float fval;
     if (!json_extract_number(json, key, &fval))
         return false;
-    *value = (int32_t)fval;
+    *value = (int32_t) fval;
     return true;
 }
 
@@ -167,15 +176,14 @@ static bool json_extract_int(const char* json, const char* key,
  * Extract boolean: finds "key": true/false
  * Returns true on success, false on failure
  */
-static bool json_extract_bool(const char* json, const char* key,
-    bool* value)
+static bool json_extract_bool(const char* json, const char* key, bool* value)
 {
     if (!json || !key || !value)
         return false;
 
     char search[64];
-    int key_len = snprintf(search, sizeof(search), "\"%s\"", key);
-    if (key_len <= 0 || (size_t)key_len >= sizeof(search))
+    int  key_len = snprintf(search, sizeof(search), "\"%s\"", key);
+    if (key_len <= 0 || (size_t) key_len >= sizeof(search))
         return false;
 
     const char* p_key = strstr(json, search);
@@ -209,15 +217,14 @@ static bool json_extract_bool(const char* json, const char* key,
  * Extract uint64_t: finds "key": big_number
  * Uses strtoull directly to avoid float precision loss (>2^53 cannot be represented exactly as float)
  */
-static bool json_extract_u64(const char* json, const char* key,
-    uint64_t* value)
+static bool json_extract_u64(const char* json, const char* key, uint64_t* value)
 {
     if (!json || !key || !value)
         return false;
 
     char search[64];
-    int key_len = snprintf(search, sizeof(search), "\"%s\"", key);
-    if (key_len <= 0 || (size_t)key_len >= sizeof(search))
+    int  key_len = snprintf(search, sizeof(search), "\"%s\"", key);
+    if (key_len <= 0 || (size_t) key_len >= sizeof(search))
         return false;
 
     const char* p_key = strstr(json, search);
@@ -243,7 +250,7 @@ static bool json_extract_u64(const char* json, const char* key,
 
     /* Parse directly with strtoull to avoid float precision loss */
     char* endptr = NULL;
-    *value = strtoull(p_key, &endptr, 10);
+    *value       = strtoull(p_key, &endptr, 10);
     return (endptr != p_key);
 }
 
@@ -251,20 +258,29 @@ static bool json_extract_u64(const char* json, const char* key,
  * Unix timestamp to date/time conversion
  * Algorithm: Gregorian calendar (1970 epoch)
  * ======================================================================== */
-void unix_to_datetime(uint32_t timestamp,
-    uint16_t* year, uint8_t* month, uint8_t* day,
-    uint8_t* hour, uint8_t* min, uint8_t* sec)
+void unix_to_datetime(uint32_t  timestamp,
+                      uint16_t* year,
+                      uint8_t*  month,
+                      uint8_t*  day,
+                      uint8_t*  hour,
+                      uint8_t*  min,
+                      uint8_t*  sec)
 {
-    static const uint8_t days_in_months[12] =
-    { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
-    static const uint16_t days_in_year[2] = { 365, 366 }; /* 0=common year, 1=leap year */
+    static const uint8_t  days_in_months[12] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+    static const uint16_t days_in_year[2]    = { 365, 366 }; /* 0=common year, 1=leap year */
 
     uint32_t t = timestamp;
 
     /* Hours, minutes, seconds */
-    if (sec)   *sec = (uint8_t)(t % 60); t /= 60;
-    if (min)   *min = (uint8_t)(t % 60); t /= 60;
-    if (hour)  *hour = (uint8_t)(t % 24); t /= 24;
+    if (sec)
+        *sec = (uint8_t) (t % 60);
+    t /= 60;
+    if (min)
+        *min = (uint8_t) (t % 60);
+    t /= 60;
+    if (hour)
+        *hour = (uint8_t) (t % 24);
+    t /= 24;
 
     /* Days since 1970-01-01 */
     uint32_t days = t;
@@ -272,29 +288,32 @@ void unix_to_datetime(uint32_t timestamp,
     uint16_t y = 1970;
     while (1)
     {
-        int is_leap = ((y % 4 == 0) && (y % 100 != 0)) || (y % 400 == 0);
-        uint16_t dpy = days_in_year[is_leap ? 1 : 0];
+        int      is_leap = ((y % 4 == 0) && (y % 100 != 0)) || (y % 400 == 0);
+        uint16_t dpy     = days_in_year[is_leap ? 1 : 0];
         if (days < dpy)
             break;
         days -= dpy;
         y++;
     }
 
-    if (year) *year = y;
+    if (year)
+        *year = y;
 
     uint8_t m;
     for (m = 0; m < 12; m++)
     {
-        int is_leap = ((y % 4 == 0) && (y % 100 != 0)) || (y % 400 == 0);
-        uint8_t dim = days_in_months[m];
+        int     is_leap = ((y % 4 == 0) && (y % 100 != 0)) || (y % 400 == 0);
+        uint8_t dim     = days_in_months[m];
         if (m == 1 && is_leap)
             dim = 29;
         if (days < dim)
             break;
         days -= dim;
     }
-    if (month) *month = m + 1;
-    if (day)   *day = (uint8_t)(days + 1);
+    if (month)
+        *month = m + 1;
+    if (day)
+        *day = (uint8_t) (days + 1);
 }
 
 /* ========================================================================
@@ -302,9 +321,9 @@ void unix_to_datetime(uint32_t timestamp,
  * ======================================================================== */
 void format_bytes(uint64_t bytes, char* out, size_t out_size)
 {
-    static const char* units[] = { "B", "KB", "MB", "GB", "TB" };
-    int unit_idx = 0;
-    double val = (double)bytes;
+    static const char* units[]  = { "B", "KB", "MB", "GB", "TB" };
+    int                unit_idx = 0;
+    double             val      = (double) bytes;
 
     while (val >= 1024.0 && unit_idx < 4)
     {
@@ -330,9 +349,9 @@ static void parse_pc_stats_json(const char* payload)
     stats.has_data = false;
 
     /* Parse numeric fields */
-    float fval;
+    float   fval;
     int32_t ival;
-    bool bval;
+    bool    bval;
 
     if (json_extract_number(payload, "cpu", &fval))
         stats.cpu = fval;
@@ -360,19 +379,19 @@ static void parse_pc_stats_json(const char* payload)
     {
         uint64_t bt_u64 = 0;
         if (json_extract_u64(payload, "boot_time", &bt_u64))
-            stats.boot_time = (uint32_t)bt_u64;
+            stats.boot_time = (uint32_t) bt_u64;
     }
     if (json_extract_int(payload, "process_count", &ival))
-        stats.process_count = (uint32_t)ival;
+        stats.process_count = (uint32_t) ival;
     if (json_extract_int(payload, "cpu_cores_logical", &ival))
-        stats.cpu_cores_logical = (uint8_t)ival;
+        stats.cpu_cores_logical = (uint8_t) ival;
     if (json_extract_int(payload, "cpu_cores_physical", &ival))
-        stats.cpu_cores_physical = (uint8_t)ival;
+        stats.cpu_cores_physical = (uint8_t) ival;
     /* Parse timestamp via strtoull to avoid float32 precision loss (2026 timestamps exceed 2^24 mantissa) */
     {
         uint64_t ts_u64 = 0;
         if (json_extract_u64(payload, "timestamp", &ts_u64))
-            stats.timestamp = (uint32_t)ts_u64;
+            stats.timestamp = (uint32_t) ts_u64;
     }
 
     if (json_extract_number(payload, "battery_percent", &fval))
@@ -492,7 +511,7 @@ static void parse_lock_event(const char* payload)
     if (strcmp(event_buf, "lock") == 0)
     {
         taskENTER_CRITICAL();
-        g_screen_state = SCREEN_STATE_CLOCK;
+        g_screen_state      = SCREEN_STATE_CLOCK;
         g_pc_event_received = true;
         taskEXIT_CRITICAL();
         RTK_LOGI(TAG, "Lock event received -> CLOCK mode\n");
@@ -500,9 +519,9 @@ static void parse_lock_event(const char* payload)
     else if (strcmp(event_buf, "unlock") == 0)
     {
         taskENTER_CRITICAL();
-        g_screen_state = SCREEN_STATE_MONITOR;
+        g_screen_state      = SCREEN_STATE_MONITOR;
         g_pc_event_received = true;
-        g_new_data_ready = true;
+        g_new_data_ready    = true;
         taskEXIT_CRITICAL();
         RTK_LOGI(TAG, "Unlock event received -> MONITOR mode\n");
     }
@@ -540,7 +559,7 @@ static void parse_sht3x_json(const char* payload)
     /* Read current values for threshold comparison */
     float cur_temp = g_pc_stats.sht3x_temperature;
     float cur_humi = g_pc_stats.sht3x_humidity;
-    bool had_data = g_pc_stats.sht3x_valid;
+    bool  had_data = g_pc_stats.sht3x_valid;
 
     /* Always update storage with latest values */
     if (temp_ok)
@@ -550,20 +569,20 @@ static void parse_sht3x_json(const char* payload)
     if (humi_ok)
         g_pc_stats.sht3x_humidity = humi_val;
     g_pc_stats.sht3x_valid = true;
-    g_pc_stats.has_data = true;
+    g_pc_stats.has_data    = true;
 
     /* Only trigger a UI refresh if change exceeds threshold — tiny
      * fluctuations (e.g. ±0.1°C) are discarded to avoid unnecessary
      * data refreshes that contribute to multi-rect tearing.         */
     {
-        float d_temp = (temp_ok) ? ((temp_val_c > cur_temp) ? (temp_val_c - cur_temp) : (cur_temp - temp_val_c)) : 0.0f;
-        float d_humi = (humi_ok) ? ((humi_val > cur_humi) ? (humi_val - cur_humi) : (cur_humi - humi_val)) : 0.0f;
-        bool above_threshold = !had_data ||
-            d_temp >= SHT3X_THRESHOLD_TEMP_C ||
-            d_humi >= SHT3X_THRESHOLD_HUMI_PCT;
+        float d_temp          = (temp_ok) ? ((temp_val_c > cur_temp) ? (temp_val_c - cur_temp) : (cur_temp - temp_val_c)) : 0.0f;
+        float d_humi          = (humi_ok) ? ((humi_val > cur_humi) ? (humi_val - cur_humi) : (cur_humi - humi_val)) : 0.0f;
+        bool  above_threshold = !had_data ||
+                                d_temp >= SHT3X_THRESHOLD_TEMP_C ||
+                                d_humi >= SHT3X_THRESHOLD_HUMI_PCT;
         if (above_threshold)
         {
-            g_sht3x_pending = true;    /* Don't set g_new_data_ready — wait for next JSON refresh sync */
+            g_sht3x_pending = true; /* Don't set g_new_data_ready — wait for next JSON refresh sync */
         }
     }
     taskEXIT_CRITICAL();
@@ -574,41 +593,42 @@ static void parse_sht3x_json(const char* payload)
  * ======================================================================== */
 static void messageArrived(MessageData* data, void* discard)
 {
-    (void)discard;
+    (void) discard;
 
-    char* topic = data->topicName->lenstring.data;
-    int   topic_len = data->topicName->lenstring.len;
-    char* payload = (char*)data->message->payload;
+    char* topic       = data->topicName->lenstring.data;
+    int   topic_len   = data->topicName->lenstring.len;
+    char* payload     = (char*) data->message->payload;
     int   payload_len = data->message->payloadlen;
 
     /* Copy payload as C string for parsing.
      * Static buffer: 2048 bytes on stack would strain MQTT task (8192B stack).
      * Reuse same buffer across invocations since this runs in MQTT task context only. */
     static char json_buf[JSON_PARSE_BUF_SIZE];
-    int copy_len = payload_len;
-    if (copy_len >= (int)sizeof(json_buf))
+    int         copy_len = payload_len;
+    if (copy_len >= (int) sizeof(json_buf))
     {
         copy_len = sizeof(json_buf) - 1;
         mqtt_printf(MQTT_INFO,
-            "DIAG: msg truncated! payload_len=%d buf=%u\n",
-            payload_len, (unsigned int)sizeof(json_buf));
+                    "DIAG: msg truncated! payload_len=%d buf=%u\n",
+                    payload_len,
+                    (unsigned int) sizeof(json_buf));
     }
     memcpy(json_buf, payload, copy_len);
     json_buf[copy_len] = '\0';
 
     /* Route by topic */
-    if (topic_len == (int)strlen(MQTT_TOPIC_PC_STATS) &&
+    if (topic_len == (int) strlen(MQTT_TOPIC_PC_STATS) &&
         strncmp(topic, MQTT_TOPIC_PC_STATS, topic_len) == 0)
     {
         parse_pc_stats_json(json_buf);
     }
-    else if (topic_len == (int)strlen(MQTT_TOPIC_SHT3X) &&
-        strncmp(topic, MQTT_TOPIC_SHT3X, topic_len) == 0)
+    else if (topic_len == (int) strlen(MQTT_TOPIC_SHT3X) &&
+             strncmp(topic, MQTT_TOPIC_SHT3X, topic_len) == 0)
     {
         parse_sht3x_json(json_buf);
     }
-    else if (topic_len == (int)strlen(MQTT_TOPIC_PC_EVENT) &&
-        strncmp(topic, MQTT_TOPIC_PC_EVENT, topic_len) == 0)
+    else if (topic_len == (int) strlen(MQTT_TOPIC_PC_EVENT) &&
+             strncmp(topic, MQTT_TOPIC_PC_EVENT, topic_len) == 0)
     {
         parse_lock_event(json_buf);
     }
@@ -628,16 +648,16 @@ void pc_stats_reset_to_default(void)
 
     /* Set N/A fields to negative values */
     empty.cpu_freq_current = -1.0f;
-    empty.cpu_freq_min = -1.0f;
-    empty.cpu_freq_max = -1.0f;
-    empty.gpu_usage = -1.0f;
-    empty.gpu_mem_used_mb = -1.0f;
+    empty.cpu_freq_min     = -1.0f;
+    empty.cpu_freq_max     = -1.0f;
+    empty.gpu_usage        = -1.0f;
+    empty.gpu_mem_used_mb  = -1.0f;
     empty.gpu_mem_total_mb = -1.0f;
-    empty.gpu_temp_c = -1.0f;
-    empty.disk_io_percent = -1.0f;
-    empty.cpu_temp_valid = false;
-    empty.sht3x_valid = false;
-    empty.has_data = false;
+    empty.gpu_temp_c       = -1.0f;
+    empty.disk_io_percent  = -1.0f;
+    empty.cpu_temp_valid   = false;
+    empty.sht3x_valid      = false;
+    empty.has_data         = false;
     /* battery_percent = 0 means N/A (see Issue 3: threshold range (0, 100]) */
 
     taskENTER_CRITICAL();
@@ -651,19 +671,19 @@ void pc_stats_reset_to_default(void)
  * ======================================================================== */
 void pc_dashboard_task(void* parameters)
 {
-    (void)parameters;
+    (void) parameters;
 
     Network                network;
     unsigned char          sendbuf[MQTT_SENDBUF_SIZE];
     unsigned char          readbuf[MQTT_READBUF_SIZE];
-    int                    rc = 0;
+    int                    rc          = 0;
     MQTTPacket_connectData connectData = MQTTPacket_connectData_initializer;
-    const char* address = MQTT_BROKER_ADDRESS;
+    const char*            address     = MQTT_BROKER_ADDRESS;
 
     /* MQTT connection params: subscribe only, no Will message */
-    connectData.MQTTVersion = 3;
-    connectData.clientID.cstring = (char*)MQTT_CLIENT_ID;
-    connectData.willFlag = 0;
+    connectData.MQTTVersion      = 3;
+    connectData.clientID.cstring = (char*) MQTT_CLIENT_ID;
+    connectData.willFlag         = 0;
 
     memset(readbuf, 0x00, sizeof(readbuf));
 
@@ -679,38 +699,38 @@ void pc_dashboard_task(void* parameters)
 
     /* ---- Initialize SNTP for time sync (fallback when no PC data) ---- */
     /* NOTE: interval controlled at runtime via SDK's sntp_get_update_interval() mapping */
-    sntp_set_update_interval(86400000);  /* re-sync every 24h (Realtek wrapper) */
+    sntp_set_update_interval(86400000); /* re-sync every 24h (Realtek wrapper) */
     sntp_setservername(0, "ntp.aliyun.com");
     sntp_init();
     RTK_LOGI(TAG, "SNTP initialized (server: ntp.aliyun.com)\n");
 
     /* Network / MQTT client initialization */
     NetworkInit(&network);
-    network.use_ssl = 1;
-    connectData.username.cstring = (char*)MQTT_USERNAME;
-    connectData.password.cstring = (char*)MQTT_PASSWORD;
+    network.use_ssl              = 1;
+    connectData.username.cstring = (char*) MQTT_USERNAME;
+    connectData.password.cstring = (char*) MQTT_PASSWORD;
 
     MQTTClientInit(&g_mqtt_client,
-        &network,
-        30000,
-        sendbuf,
-        sizeof(sendbuf),
-        readbuf,
-        sizeof(readbuf));
+                   &network,
+                   30000,
+                   sendbuf,
+                   sizeof(sendbuf),
+                   readbuf,
+                   sizeof(readbuf));
 
     g_mqtt_client.mqttstatus = MQTT_START;
 
     /* Main loop */
     while (1)
     {
-        fd_set        read_fds;
-        fd_set        except_fds;
+        fd_set         read_fds;
+        fd_set         except_fds;
         struct timeval timeout;
 
         FD_ZERO(&read_fds);
         FD_ZERO(&except_fds);
 
-        timeout.tv_sec = MQTT_SELECT_TIMEOUT;
+        timeout.tv_sec  = MQTT_SELECT_TIMEOUT;
         timeout.tv_usec = 0;
 
         if (network.my_socket >= 0)
@@ -720,14 +740,15 @@ void pc_dashboard_task(void* parameters)
         }
 
         rc = FreeRTOS_Select(network.my_socket + 1,
-            &read_fds,
-            NULL,
-            &except_fds,
-            &timeout);
+                             &read_fds,
+                             NULL,
+                             &except_fds,
+                             &timeout);
         if (rc < 0)
         {
             mqtt_printf(MQTT_INFO,
-                "FreeRTOS_Select failed, rc=%d\n", rc);
+                        "FreeRTOS_Select failed, rc=%d\n",
+                        rc);
         }
 
         if (FD_ISSET(network.my_socket, &except_fds))
@@ -738,11 +759,11 @@ void pc_dashboard_task(void* parameters)
 
         /* MQTT state machine (connect, subscribe, receive) */
         MQTTDataHandle(&g_mqtt_client,
-            &read_fds,
-            &connectData,
-            messageArrived,
-            (char*)address,
-            (char*)MQTT_SUB_TOPIC);
+                       &read_fds,
+                       &connectData,
+                       messageArrived,
+                       (char*) address,
+                       (char*) MQTT_SUB_TOPIC);
 
         /* Update MQTT connection status for UI layer */
         g_mqtt_connected = (g_mqtt_client.mqttstatus == MQTT_RUNNING);
@@ -756,23 +777,22 @@ void pc_dashboard_task(void* parameters)
          */
         if (g_mqtt_client.mqttstatus == MQTT_RUNNING && !g_sht3x_subscribed)
         {
-            RTK_LOGI(TAG, "Subscribing to SHT3X topic: %s\n",
-                MQTT_SUB_TOPIC_SHT3X);
+            RTK_LOGI(TAG, "Subscribing to SHT3X topic: %s\n", MQTT_SUB_TOPIC_SHT3X);
             int sub_rc = MQTTSubscribe(&g_mqtt_client,
-                MQTT_SUB_TOPIC_SHT3X,
-                QOS0,
-                messageArrived);
+                                       MQTT_SUB_TOPIC_SHT3X,
+                                       QOS0,
+                                       messageArrived);
 
             /* MQTT_TASK mode: MQTTSubscribe() doesn't register handler, do it manually */
             if (sub_rc == 0)
             {
-                int i;
+                int  i;
                 bool already_registered = false;
                 for (i = 0; i < MAX_MESSAGE_HANDLERS; ++i)
                 {
                     if (g_mqtt_client.messageHandlers[i].topicFilter != NULL &&
                         strcmp(g_mqtt_client.messageHandlers[i].topicFilter,
-                            MQTT_SUB_TOPIC_SHT3X) == 0)
+                               MQTT_SUB_TOPIC_SHT3X) == 0)
                     {
                         already_registered = true;
                         break;
@@ -798,28 +818,27 @@ void pc_dashboard_task(void* parameters)
         }
         else if (g_mqtt_client.mqttstatus != MQTT_RUNNING)
         {
-            g_sht3x_subscribed = false;  /* Reset on disconnect for re-subscribe on reconnect */
+            g_sht3x_subscribed = false; /* Reset on disconnect for re-subscribe on reconnect */
         }
 
         /* Subscribe to lock screen event topic */
         if (g_mqtt_client.mqttstatus == MQTT_RUNNING && !g_pc_event_subscribed)
         {
-            RTK_LOGI(TAG, "Subscribing to lock event topic: %s\n",
-                MQTT_SUB_TOPIC_EVENT);
+            RTK_LOGI(TAG, "Subscribing to lock event topic: %s\n", MQTT_SUB_TOPIC_EVENT);
             int sub_rc = MQTTSubscribe(&g_mqtt_client,
-                MQTT_SUB_TOPIC_EVENT,
-                QOS0,
-                messageArrived);
+                                       MQTT_SUB_TOPIC_EVENT,
+                                       QOS0,
+                                       messageArrived);
 
             if (sub_rc == 0)
             {
-                int i;
+                int  i;
                 bool already_registered = false;
                 for (i = 0; i < MAX_MESSAGE_HANDLERS; ++i)
                 {
                     if (g_mqtt_client.messageHandlers[i].topicFilter != NULL &&
                         strcmp(g_mqtt_client.messageHandlers[i].topicFilter,
-                            MQTT_SUB_TOPIC_EVENT) == 0)
+                               MQTT_SUB_TOPIC_EVENT) == 0)
                     {
                         already_registered = true;
                         break;
@@ -865,11 +884,11 @@ void pc_dashboard_start(void)
     }
 
     if (rtos_task_create(&g_mqtt_task_handle,
-        "pc_dashboard_task",
-        pc_dashboard_task,
-        NULL,
-        TASK_STACK_MQTT,
-        tskIDLE_PRIORITY + 2) != RTK_SUCCESS)
+                         "pc_dashboard_task",
+                         pc_dashboard_task,
+                         NULL,
+                         TASK_STACK_MQTT,
+                         tskIDLE_PRIORITY + 2) != RTK_SUCCESS)
     {
         RTK_LOGE(TAG, "Create PC dashboard task failed.\n");
         g_mqtt_task_handle = NULL;

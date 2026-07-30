@@ -21,3 +21,5 @@ build_*/
 .claude/
 LOG/
 CLAUDE.md
+# clangd 
+.clangd
