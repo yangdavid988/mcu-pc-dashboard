@@ -18,6 +18,19 @@ typedef struct {
 #define SHT3X_THRESHOLD_TEMP_C     0.5f   /* °C, default: ±0.5°C */
 #define SHT3X_THRESHOLD_HUMI_PCT   5.0f   /* %RH, default: ±5% */
 
+/* ========================================================================
+ * Backlight brightness control
+ * ======================================================================== */
+
+/** Master enable: 0 = always 100 %, 1 = allow dimming in standby */
+#define BRIGHTNESS_ENABLED          1
+
+/** Standby brightness (0..100).  20 = dim in clock UI */
+#define BRIGHTNESS_STANDBY_PCT      20
+
+/** Normal brightness (0..100).  100 = full brightness in monitor UI */
+#define BRIGHTNESS_NORMAL_PCT       100
+
 #ifndef FLASH_THRESHOLD_EXTERNAL
 static const flash_threshold_t g_flash_threshold = {
     .cpu_pct = 80.0f,

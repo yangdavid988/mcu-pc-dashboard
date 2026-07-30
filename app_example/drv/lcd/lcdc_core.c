@@ -1,10 +1,3 @@
-/*
- * Copyright (c) 2025 Realtek Semiconductor Corp.
- * All rights reserved.
- *
- * SPDX-License-Identifier: BSD-3-Clause
- */
-
 #include "lcdc_core.h"
 #include "ameba_soc.h"
 #include "os_wrapper.h"

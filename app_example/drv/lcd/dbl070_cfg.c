@@ -1,12 +1,6 @@
-/*
- * Copyright (c) 2025 Realtek Semiconductor Corp.
- * All rights reserved.
- *
- * SPDX-License-Identifier: BSD-3-Clause
- */
-
 #include "dbl070_cfg.h"
 #include "ameba_soc.h"
+#include "backlight_ctrl.h"
 
 /* ========================================================================
  * DBL070 pin configuration
@@ -84,7 +78,7 @@ const lcdc_screen_cfg_t g_dbl070_cfg = {
     .hfp            = 8,
     .image_format   = LDC_IMG_FMT_ARGB8888,
     .pinmux_config  = dbl070_pinmux,
-    .backlight_init = NULL,
+    .backlight_init = backlight_init,
     .name           = "DBL070",
     .fb_base        = 0x60000000,
 };

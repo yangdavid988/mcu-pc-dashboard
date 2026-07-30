@@ -1,12 +1,6 @@
-/*
- * Copyright (c) 2025 Realtek Semiconductor Corp.
- * All rights reserved.
- *
- * SPDX-License-Identifier: BSD-3-Clause
- */
-
 #include "st7262_cfg.h"
 #include "ameba_soc.h"
+#include "backlight_ctrl.h"
 
 /* ========================================================================
  * ST7262 pin configuration
@@ -72,7 +66,7 @@ const lcdc_screen_cfg_t g_st7262_cfg = {
     .hfp            = 40,
     .image_format   = LDC_IMG_FMT_ARGB8888,
     .pinmux_config  = st7262_pinmux,
-    .backlight_init = NULL,
+    .backlight_init = backlight_init,
     .name           = "ST7262",
     .fb_base        = 0x60000000,
 };

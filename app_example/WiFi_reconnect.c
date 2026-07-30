@@ -5,29 +5,6 @@ u8 retry_cnt = 0;
 #define TAG         "WIFI_RECONNECT"
 int user_WiFi_connect()
 {
-    /**
-  * @brief    Describes connection settings for connecting to an AP
-  * @note
-  *        1. If used for Wi-Fi connect, setting `channel` to 0 means full channel scan;
-  *           setting `channel` to a specific value means do active scan on that channel.
-  *        2. Set `pscan_option` to @ref RTW_PSCAN_FAST_SURVEY for fast survey (active scan on
-  *           specified channel, 25ms each, up to 7 attempts); 0 for normal scan.
-  */
-  // struct rtw_network_info {
-  //     struct rtw_ssid                ssid;  /**< AP's SSID (max length: @ref RTW_ESSID_MAX_SIZE). */
-  //     struct rtw_mac                bssid; /**< AP's MAC address. */
-  //     u32                            security_type; /**< Necessarily set for WEP (@ref RTW_SECURITY_WEP_PSK, @ref RTW_SECURITY_WEP_SHARED). Auto-adjusted for others. */
-  //     u8                           *password;       /**< AP's password. */
-  //     s32                         password_len;  /**< Password length (max: @ref RTW_MAX_PSK_LEN). */
-  //     s32                         key_id;           /**< WEP key ID (0-3). Only for WEP.*/
-  //     u8                            channel;       /**< 0 for full scan, other values to scan specific channel. */
-  //     u8                             pscan_option;    /**< @ref RTW_PSCAN_FAST_SURVEY for fast survey, 0 for normal scan. */
-  //     u8                             is_wps_trigger;    /**< Indicates if connection is triggered by WPS. */
-  //     struct rtw_wpa_supp_connect    wpa_supp;   /**< Used by Linux host for STA connect details (not used by RTOS). */
-  //     struct rtw_mac                prev_bssid; /**< BSSID of the AP before roaming. */
-  //     u8                            by_reconn; /**< Indicates if connection is triggered by auto-reconnect. */
-  //     u8                            rom_rsvd[4];
-  // };
     struct rtw_network_info connect_param = { 0 };
     /*Connect parameter set*/
     memcpy(connect_param.ssid.val, (char*)SSID, strlen(SSID));/**< SSID value, terminated with a null character.*/
