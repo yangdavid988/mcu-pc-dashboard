@@ -6,74 +6,74 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
-  /* ========================================================================
-   * Constants
-   * ======================================================================== */
-#define WIDTH                       800
-#define HEIGHT                      480
-#define LCDC_LINE_NUM_INTR_DEF      (HEIGHT * 5 / 6)   /* line 400 */
-#define FB_BUF_SIZE                 (WIDTH * HEIGHT * 4)/* 1,536,000 bytes per buffer */
+/* ========================================================================
+ * Constants
+ * ======================================================================== */
+#define WIDTH                  800
+#define HEIGHT                 480
+#define LCDC_LINE_NUM_INTR_DEF (HEIGHT * 5 / 6)     /* line 400 */
+#define FB_BUF_SIZE            (WIDTH * HEIGHT * 4) /* 1,536,000 bytes per buffer */
 
-  /* ========================================================================
-   * PSRAM static framebuffer allocation (section attribute)
-   *
-   * The LVGL double-buffer is placed in the .psram_heap.start section
-   * (KM4TZ_BD_PSRAM, NOLOAD) which is the only NOLOAD section that maps
-   * to the linker-managed PSRAM region.  This achieves two goals without
-   * modifying the SDK linker script:
-   *
-   * 1. The linker reserves the space — __psram_heap_buffer_start__
-   *    advances past the arrays, so even if a future runtime enables a
-   *    PSRAM heap (currently __psram_heap_buffer_size__ = 0), the heap
-   *    cannot overlap with framebuffer memory.
-   *
-   * 2. NOLOAD prevents flash-image bloat (BSS-like zero-fill at boot).
-   *
-   * The actual framebuffer base address is read via lcdc_core_get_fb_base()
-   * at runtime, replacing the old hardcoded cfg->fb_base.  LCDC DMA,
-   * LVGL registration, and buffer flush all use this dynamic address.
-   * ======================================================================== */
+/* ========================================================================
+ * PSRAM static framebuffer allocation (section attribute)
+ *
+ * The LVGL double-buffer is placed in the .psram_heap.start section
+ * (KM4TZ_BD_PSRAM, NOLOAD) which is the only NOLOAD section that maps
+ * to the linker-managed PSRAM region.  This achieves two goals without
+ * modifying the SDK linker script:
+ *
+ * 1. The linker reserves the space — __psram_heap_buffer_start__
+ *    advances past the arrays, so even if a future runtime enables a
+ *    PSRAM heap (currently __psram_heap_buffer_size__ = 0), the heap
+ *    cannot overlap with framebuffer memory.
+ *
+ * 2. NOLOAD prevents flash-image bloat (BSS-like zero-fill at boot).
+ *
+ * The actual framebuffer base address is read via lcdc_core_get_fb_base()
+ * at runtime, replacing the old hardcoded cfg->fb_base.  LCDC DMA,
+ * LVGL registration, and buffer flush all use this dynamic address.
+ * ======================================================================== */
 __attribute__((section(".psram_heap.start")))
-__attribute__((aligned(64)))
-static volatile uint8_t s_lvgl_fb_pool[FB_BUF_SIZE * 2];  /* 2 × 1.5 MB = 3 MB */
+__attribute__((aligned(64))) static volatile uint8_t s_lvgl_fb_pool[FB_BUF_SIZE * 2]; /* 2 × 1.5 MB = 3 MB */
 
 uint32_t lcdc_core_get_fb_base(void)
 {
-    return (uint32_t)s_lvgl_fb_pool;
+    return (uint32_t) s_lvgl_fb_pool;
 }
 
-   /* ========================================================================
-    * Internal state
-    * ======================================================================== */
-static const lcdc_screen_cfg_t* g_cfg = NULL;
-static volatile u8* g_buffer = NULL;
-static volatile int g_refresh = 0;
+/* ========================================================================
+ * Internal state
+ * ======================================================================== */
+static const lcdc_screen_cfg_t* g_cfg     = NULL;
+static volatile u8*             g_buffer  = NULL;
+static volatile int             g_refresh = 0;
 
 /* VBlank sync: accumulate dirty region, flush DCache during VBlank (eliminate tearing) */
-static volatile u32 g_dirty_start = 0;
-static volatile u32 g_dirty_end = 0;
+static volatile u32 g_dirty_start   = 0;
+static volatile u32 g_dirty_end     = 0;
 static volatile int g_dirty_pending = 0;
 
-static struct {
+static struct
+{
     u32 IrqNum;
     u32 IrqData;
     u32 IrqPriority;
 } gLcdcIrqInfo;
 
 /* VBlank callback (direct function pointer, no struct wrapper needed) */
-static void (* volatile g_vblank_cb)(void*) = NULL;
-static void* volatile g_data = NULL;
+static void (*volatile g_vblank_cb)(void*) = NULL;
+static void* volatile g_data               = NULL;
 
 /* Stage 1: recorded by flush_cb (DCache_Clean done, no pendig flip) */
 static volatile uint32_t g_pending_flush_fb = 0;
-static void* volatile g_pending_flush_ctx = NULL;
+static void* volatile g_pending_flush_ctx   = NULL;
 
 /* Stage 2: committed pending flip — consumed by LINE ISR @ row 400 */
 static volatile uint32_t g_pending_flip_fb = 0;
-static void* volatile g_pending_context = NULL;
+static void* volatile g_pending_context    = NULL;
 
 /* flip_done callback (registered by lcd_drv.c) */
-static void (* volatile g_flip_done_cb)(void*) = NULL;
+static void (*volatile g_flip_done_cb)(void*) = NULL;
 
 /* Deferred flip_done_cb: LINE ISR sets this, FRD ISR consumes it */
 static void* volatile g_flip_done_deferred_ctx = NULL;
@@ -82,11 +82,11 @@ static void* volatile g_flip_done_deferred_ctx = NULL;
  * Diagnostic counters (always-on, accessed via public getter functions)
  * ======================================================================== */
 
-static volatile uint32_t s_frd_count = 0;
-static volatile uint32_t s_flip_count = 0;
-static volatile uint32_t s_flush_count = 0;
+static volatile uint32_t s_frd_count      = 0;
+static volatile uint32_t s_flip_count     = 0;
+static volatile uint32_t s_flush_count    = 0;
 static volatile uint32_t s_pend_overwrite = 0;
-static volatile uint32_t s_last_frd_tick = 0;
+static volatile uint32_t s_last_frd_tick  = 0;
 static volatile uint32_t s_last_line_tick = 0;
 static volatile uint32_t s_last_flip_tick = 0;
 
@@ -125,14 +125,14 @@ static void lcdc_irq_handler(void)
                 g_dirty_pending = 0;
             }
             g_refresh = 0;
-            LCDC_DMAImgCfg(LCDC, (u32)g_buffer);
+            LCDC_DMAImgCfg(LCDC, (u32) g_buffer);
             LCDC_ShadowReloadConfig(LCDC);
         }
 
         /* Deferred flip_done_cb (DMA address set in LINE, effective after VBlank) */
         if (g_flip_done_deferred_ctx)
         {
-            void* ctx = (void*)g_flip_done_deferred_ctx;
+            void* ctx                = (void*) g_flip_done_deferred_ctx;
             g_flip_done_deferred_ctx = NULL;
             if (g_flip_done_cb)
             {
@@ -163,9 +163,9 @@ static void lcdc_irq_handler(void)
             s_last_flip_tick = rtos_time_get_current_system_time_ms();
 
             /* Defer flip_done_cb to FRD to avoid ~3ms tearing window */
-            g_flip_done_deferred_ctx = (void*)g_pending_context;
-            g_pending_flip_fb = 0;
-            g_pending_context = NULL;
+            g_flip_done_deferred_ctx = (void*) g_pending_context;
+            g_pending_flip_fb        = 0;
+            g_pending_context        = NULL;
         }
     }
 
@@ -202,28 +202,28 @@ static void lcdc_driver_init(const lcdc_screen_cfg_t* cfg)
     LCDC_RGBInitStruct.Panel_RgbTiming.RgbHbp = cfg->hbp;
     LCDC_RGBInitStruct.Panel_RgbTiming.RgbHfp = cfg->hfp;
 
-    LCDC_RGBInitStruct.Panel_Init.IfWidth = LCDC_RGB_IF_24_BIT;
-    LCDC_RGBInitStruct.Panel_Init.ImgWidth = WIDTH;
+    LCDC_RGBInitStruct.Panel_Init.IfWidth   = LCDC_RGB_IF_24_BIT;
+    LCDC_RGBInitStruct.Panel_Init.ImgWidth  = WIDTH;
     LCDC_RGBInitStruct.Panel_Init.ImgHeight = HEIGHT;
 
-    LCDC_RGBInitStruct.Panel_RgbTiming.Flags.RgbEnPolar = LCDC_RGB_EN_PUL_HIGH_LEV_ACTIVE;
+    LCDC_RGBInitStruct.Panel_RgbTiming.Flags.RgbEnPolar      = LCDC_RGB_EN_PUL_HIGH_LEV_ACTIVE;
     LCDC_RGBInitStruct.Panel_RgbTiming.Flags.RgbDclkActvEdge = LCDC_RGB_DCLK_FALLING_EDGE_FETCH;
-    LCDC_RGBInitStruct.Panel_RgbTiming.Flags.RgbHsPolar = LCDC_RGB_HS_PUL_LOW_LEV_SYNC;
-    LCDC_RGBInitStruct.Panel_RgbTiming.Flags.RgbVsPolar = LCDC_RGB_VS_PUL_LOW_LEV_SYNC;
+    LCDC_RGBInitStruct.Panel_RgbTiming.Flags.RgbHsPolar      = LCDC_RGB_HS_PUL_LOW_LEV_SYNC;
+    LCDC_RGBInitStruct.Panel_RgbTiming.Flags.RgbVsPolar      = LCDC_RGB_VS_PUL_LOW_LEV_SYNC;
 
     switch (cfg->image_format)
     {
-    case LDC_IMG_FMT_RGB565:
-        LCDC_RGBInitStruct.Panel_Init.InputFormat = LCDC_INPUT_FORMAT_RGB565;
-        break;
-    case LDC_IMG_FMT_ARGB8888:
-        LCDC_RGBInitStruct.Panel_Init.InputFormat = LCDC_INPUT_FORMAT_ARGB8888;
-        break;
-    default:
-        LCDC_RGBInitStruct.Panel_Init.InputFormat = LCDC_INPUT_FORMAT_RGB888;
-        break;
+        case LDC_IMG_FMT_RGB565:
+            LCDC_RGBInitStruct.Panel_Init.InputFormat = LCDC_INPUT_FORMAT_RGB565;
+            break;
+        case LDC_IMG_FMT_ARGB8888:
+            LCDC_RGBInitStruct.Panel_Init.InputFormat = LCDC_INPUT_FORMAT_ARGB8888;
+            break;
+        default:
+            LCDC_RGBInitStruct.Panel_Init.InputFormat = LCDC_INPUT_FORMAT_RGB888;
+            break;
     }
-    LCDC_RGBInitStruct.Panel_Init.OutputFormat = LCDC_OUTPUT_FORMAT_RGB888;
+    LCDC_RGBInitStruct.Panel_Init.OutputFormat   = LCDC_OUTPUT_FORMAT_RGB888;
     LCDC_RGBInitStruct.Panel_Init.RGBRefreshFreq = 60;
 
     LCDC_RGBInit(LCDC, &LCDC_RGBInitStruct);
@@ -240,16 +240,16 @@ static void lcdc_driver_init(const lcdc_screen_cfg_t* cfg)
         LCDC_DMAImgCfg(LCDC, _fb + FB_BUF_SIZE);
         LCDC_ShadowReloadConfig(LCDC);
 
-        memset((void*)_fb, 0, FB_BUF_SIZE * 2);
+        memset((void*) _fb, 0, FB_BUF_SIZE * 2);
         DCache_Clean(_fb, FB_BUF_SIZE * 2);
     }
 
     LCDC_LineINTPosConfig(LCDC, LCDC_LINE_NUM_INTR_DEF);
     LCDC_INTConfig(LCDC,
-        LCDC_BIT_LCD_FRD_INTEN |
-        LCDC_BIT_DMA_UN_INTEN |
-        LCDC_BIT_LCD_LIN_INTEN,
-        ENABLE);
+                   LCDC_BIT_LCD_FRD_INTEN |
+                       LCDC_BIT_DMA_UN_INTEN |
+                       LCDC_BIT_LCD_LIN_INTEN,
+                   ENABLE);
 
     LCDC_Cmd(LCDC, ENABLE);
 } /* lcdc_driver_init */
@@ -262,25 +262,25 @@ void lcdc_core_init(const lcdc_screen_cfg_t* cfg)
 {
     g_cfg = cfg;
     /* Use section-attribute allocated PSRAM base, not cfg->fb_base */
-    g_buffer = (u8*)lcdc_core_get_fb_base();
+    g_buffer = (u8*) lcdc_core_get_fb_base();
 
     if (cfg->backlight_init)
     {
         cfg->backlight_init();
     }
 
-    gLcdcIrqInfo.IrqNum = LCDC_IRQ;
+    gLcdcIrqInfo.IrqNum      = LCDC_IRQ;
     gLcdcIrqInfo.IrqPriority = INT_PRI_HIGH;
-    gLcdcIrqInfo.IrqData = (u32)LCDC;
+    gLcdcIrqInfo.IrqData     = (u32) LCDC;
 
     cfg->pinmux_config();
 
     LCDC_RccEnable();
 
-    InterruptRegister((IRQ_FUN)lcdc_irq_handler,
-        gLcdcIrqInfo.IrqNum,
-        NULL,
-        gLcdcIrqInfo.IrqPriority);
+    InterruptRegister((IRQ_FUN) lcdc_irq_handler,
+                      gLcdcIrqInfo.IrqNum,
+                      NULL,
+                      gLcdcIrqInfo.IrqPriority);
     InterruptEn(gLcdcIrqInfo.IrqNum, gLcdcIrqInfo.IrqPriority);
 
     lcdc_driver_init(cfg);
@@ -288,10 +288,10 @@ void lcdc_core_init(const lcdc_screen_cfg_t* cfg)
     /* Reconfigure IRQ events (overrides settings in lcdc_driver_init) */
     LCDC_LineINTPosConfig(LCDC, LCDC_LINE_NUM_INTR_DEF);
     LCDC_INTConfig(LCDC,
-        LCDC_BIT_LCD_FRD_INTEN |
-        LCDC_BIT_DMA_UN_INTEN |
-        LCDC_BIT_LCD_LIN_INTEN,
-        ENABLE);
+                   LCDC_BIT_LCD_FRD_INTEN |
+                       LCDC_BIT_DMA_UN_INTEN |
+                       LCDC_BIT_LCD_LIN_INTEN,
+                   ENABLE);
 
     LCDC_Cmd(LCDC, ENABLE);
 }
@@ -303,37 +303,39 @@ void lcdc_core_flush_buffer(uint8_t* buffer)
 
     switch (g_cfg->image_format)
     {
-    case LDC_IMG_FMT_ARGB8888:
-        g_buffer = buffer;
-        DCache_Clean((u32)g_buffer, WIDTH * HEIGHT * 4);
-        break;
-    case LDC_IMG_FMT_RGB888:
-        g_buffer = buffer;
-        DCache_Clean((u32)g_buffer, WIDTH * HEIGHT * 3);
-        break;
-    default:
-        g_buffer = buffer;
-        DCache_Clean((u32)g_buffer, WIDTH * HEIGHT * 2);
-        break;
+        case LDC_IMG_FMT_ARGB8888:
+            g_buffer = buffer;
+            DCache_Clean((u32) g_buffer, WIDTH * HEIGHT * 4);
+            break;
+        case LDC_IMG_FMT_RGB888:
+            g_buffer = buffer;
+            DCache_Clean((u32) g_buffer, WIDTH * HEIGHT * 3);
+            break;
+        default:
+            g_buffer = buffer;
+            DCache_Clean((u32) g_buffer, WIDTH * HEIGHT * 2);
+            break;
     }
     g_refresh = 1;
 }
 
 void lcdc_core_get_info(int* width, int* height)
 {
-    if (width)  *width = WIDTH;
-    if (height) *height = HEIGHT;
+    if (width)
+        *width = WIDTH;
+    if (height)
+        *height = HEIGHT;
 }
 
 void lcdc_core_register_vblank(void (*cb)(void*), void* user_data)
 {
     g_vblank_cb = cb;
-    g_data = user_data;
+    g_data      = user_data;
 }
 
 void lcdc_core_trigger_refresh(uint8_t* buffer)
 {
-    g_buffer = buffer;
+    g_buffer  = buffer;
     g_refresh = 1;
 }
 
@@ -345,19 +347,19 @@ void lcdc_core_mark_dirty(u32 off, u32 len)
     if (!g_cfg)
         return;
 
-    u32 fb_size = (u32)WIDTH * HEIGHT * 4;
+    u32 fb_size = (u32) WIDTH * HEIGHT * 4;
     /* Clip len to ensure dirty range stays within frame buffer boundary, prevent DCache_Clean overflow */
     if (off < fb_size)
     {
         if (off + len > fb_size)
             len = fb_size - off;
         u32 area_start = lcdc_core_get_fb_base() + off;
-        u32 area_end = area_start + len;
+        u32 area_end   = area_start + len;
 
         if (!g_dirty_pending)
         {
-            g_dirty_start = area_start;
-            g_dirty_end = area_end;
+            g_dirty_start   = area_start;
+            g_dirty_end     = area_end;
             g_dirty_pending = 1;
         }
         else
@@ -383,14 +385,14 @@ void lcdc_core_flush_now(uint32_t fb_addr)
 
 void lcdc_core_record_flush(uint32_t fb_addr, void* context)
 {
-    DCache_Clean(fb_addr, (uint32_t)WIDTH * (uint32_t)HEIGHT * 4u);
+    DCache_Clean(fb_addr, (uint32_t) WIDTH * (uint32_t) HEIGHT * 4u);
     __DSB();
 
     /* Record ONLY — no pending flip */
     taskENTER_CRITICAL();
     if (g_pending_flush_fb)
         s_pend_overwrite++;
-    g_pending_flush_fb = fb_addr;
+    g_pending_flush_fb  = fb_addr;
     g_pending_flush_ctx = context;
     taskEXIT_CRITICAL();
 }
@@ -402,9 +404,9 @@ void lcdc_core_flush_commit(void)
     {
         if (g_pending_flip_fb)
             s_pend_overwrite++;
-        g_pending_flip_fb = g_pending_flush_fb;
-        g_pending_context = g_pending_flush_ctx;
-        g_pending_flush_fb = 0;
+        g_pending_flip_fb   = g_pending_flush_fb;
+        g_pending_context   = g_pending_flush_ctx;
+        g_pending_flush_fb  = 0;
         g_pending_flush_ctx = NULL;
     }
     taskEXIT_CRITICAL();
@@ -419,7 +421,7 @@ void lcdc_core_register_flip_done(void (*cb)(void*))
  * Debug API
  * ======================================================================== */
 
- /** Record one flush_cb call (called by lcd_drv.c) */
+/** Record one flush_cb call (called by lcd_drv.c) */
 void lcdc_core_count_flush(void)
 {
     s_flush_count++;
@@ -463,4 +465,3 @@ bool lcdc_core_is_flip_pending(void)
 {
     return g_pending_flip_fb != 0;
 }
-

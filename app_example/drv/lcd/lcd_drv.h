@@ -8,7 +8,7 @@
  * Unified LCD interface
  * ======================================================================== */
 
- /* Screen initialization (uses ARGB8888 format internally) */
+/* Screen initialization (uses ARGB8888 format internally) */
 void lcd_init(void);
 
 /* Get screen resolution */
@@ -26,7 +26,7 @@ const char* lcd_get_driver_name(void);
 /* ========================================================================
  * LVGL integration callbacks
  * ======================================================================== */
-void lvgl_disp_flush(lv_display_t* disp, const lv_area_t* area, uint8_t* color_p);
+void     lvgl_disp_flush(lv_display_t* disp, const lv_area_t* area, uint8_t* color_p);
 uint32_t custom_tick_get(void);
 
 #endif /* LCD_DRV_H */

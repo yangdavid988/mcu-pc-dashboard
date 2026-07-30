@@ -4,17 +4,18 @@
 #include "lvgl.h"
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-/* Lock screen clock UI life-cycle */
-void create_lock_screen_clock(void);
-void destroy_lock_screen_clock(void);
-void update_lock_screen_clock(void);
+    /* Lock screen clock UI life-cycle */
+    void create_lock_screen_clock(void);
+    void destroy_lock_screen_clock(void);
+    void update_lock_screen_clock(void);
 
-/* Unlock transition: fade-out clock, then destroy (300 ms ease-out).
- * Call AFTER creating monitor layout (clock fades, revealing monitor behind). */
-void start_unlock_transition(void);
+    /* Unlock transition: fade-out clock, then destroy (300 ms ease-out).
+     * Call AFTER creating monitor layout (clock fades, revealing monitor behind). */
+    void start_unlock_transition(void);
 
 #ifdef __cplusplus
 }

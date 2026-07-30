@@ -23,7 +23,7 @@
 
 MCU 仅作为订阅者 — 只接收数据，不发布任何消息。
 
-- 📄 [芯片与模块信息](https://aiot.realmcu.com/cn/module/index.html)
+- 📄 [芯片与模块信息](https://aiot.realmcu.com/cn/home.html)
 
 ---
 <div align="center">

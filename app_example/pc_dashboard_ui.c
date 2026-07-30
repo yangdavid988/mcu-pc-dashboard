@@ -16,33 +16,33 @@
  * - update_dashboard_ui() — data refresh (will be migrated to V3 in future)
  */
 
- /* ========================================================================
-  * Layout common constants
-  * ======================================================================== */
-#define LAYOUT_PANEL_HEIGHT       376   /* Main container height (also 3-column panel height) */
-#define LAYOUT_CARD_GAP           4     /* Uniform card row/column gap */
-#define LAYOUT_CARD_TOP_OFFSET    4     /* First card Y offset = bottom margin, symmetrical */
-#define LAYOUT_CARD_LEFT_CH       89    /* Left panel card height */
-#define LAYOUT_CARD_MID_GAP       4     /* Middle panel card gap */
-#define LAYOUT_RIGHT_NET_CH       100   /* Right NETWORK card height */
-#define LAYOUT_CARD_PADDING_H     18    /* Card horizontal padding sum */
-#define LAYOUT_CARD_BAR_MARGIN    10    /* Bar inset relative to card edge */
-#define LAYOUT_CARD_BAR_H         14    /* Default bar height */
+/* ========================================================================
+ * Layout common constants
+ * ======================================================================== */
+#define LAYOUT_PANEL_HEIGHT    376 /* Main container height (also 3-column panel height) */
+#define LAYOUT_CARD_GAP        4   /* Uniform card row/column gap */
+#define LAYOUT_CARD_TOP_OFFSET 4   /* First card Y offset = bottom margin, symmetrical */
+#define LAYOUT_CARD_LEFT_CH    89  /* Left panel card height */
+#define LAYOUT_CARD_MID_GAP    4   /* Middle panel card gap */
+#define LAYOUT_RIGHT_NET_CH    100 /* Right NETWORK card height */
+#define LAYOUT_CARD_PADDING_H  18  /* Card horizontal padding sum */
+#define LAYOUT_CARD_BAR_MARGIN 10  /* Bar inset relative to card edge */
+#define LAYOUT_CARD_BAR_H      14  /* Default bar height */
 
-  /* FA icons + Montserrat text use separate labels. create_icon_lbl() creates
-   * icon labels independently to avoid LVGL 9.3 fallback issues causing FA icons
-   * to display as garbage characters. */
+/* FA icons + Montserrat text use separate labels. create_icon_lbl() creates
+ * icon labels independently to avoid LVGL 9.3 fallback issues causing FA icons
+ * to display as garbage characters. */
 
-   /* ========================================================================
-    * UI component globals
-    * ======================================================================== */
+/* ========================================================================
+ * UI component globals
+ * ======================================================================== */
 lv_timer_t* g_dashboard_timer = NULL;
 
 /* --- Waiting screen --- */
 static lv_obj_t* g_waiting_container = NULL;
 
 /* --- Header --- */
-static lv_obj_t* g_time_label = NULL;
+static lv_obj_t* g_time_label    = NULL;
 static lv_obj_t* g_warning_label = NULL; /* Data timeout warning */
 
 /* --- Main container (frames 3 columns) --- */
@@ -62,15 +62,15 @@ static lv_obj_t* g_icon_warning = NULL;
 
 /* Local time tracking */
 uint32_t g_last_displayed_second = 0;
-uint32_t g_time_base_ts = 0;
-uint32_t g_time_base_ms = 0;
+uint32_t g_time_base_ts          = 0;
+uint32_t g_time_base_ms          = 0;
 
 /* MQTT data freshness tracking */
-static bool     g_timeout_triggered = false;  /* Avoid duplicate reset triggers */
+static bool g_timeout_triggered = false; /* Avoid duplicate reset triggers */
 
 /* MQTT connection status label (assigned by each layout's create function) */
-lv_obj_t* g_mqtt_status_label = NULL;
-static int g_mqtt_prev_connected = -1;   /* -1 = uninitialized, ensures first trigger always fires */
+lv_obj_t*  g_mqtt_status_label   = NULL;
+static int g_mqtt_prev_connected = -1; /* -1 = uninitialized, ensures first trigger always fires */
 
 void reset_mqtt_status_tracking(void)
 {
@@ -81,11 +81,11 @@ void reset_mqtt_status_tracking(void)
  * Helper functions
  * ======================================================================== */
 
- /* Create a progress bar with glow effect */
+/* Create a progress bar with glow effect */
 
- /* Create a card container (with accent top strip + shadow) */
+/* Create a card container (with accent top strip + shadow) */
 
- /* Update clock display */
+/* Update clock display */
 static void update_clock_display(void)
 {
     if (g_time_label == NULL)
@@ -97,8 +97,8 @@ static void update_clock_display(void)
         return;
     }
 
-    uint32_t now_ms = rtos_time_get_current_system_time_ms();
-    uint32_t elapsed_s = (now_ms - g_time_base_ms) / 1000;
+    uint32_t now_ms     = rtos_time_get_current_system_time_ms();
+    uint32_t elapsed_s  = (now_ms - g_time_base_ms) / 1000;
     uint32_t current_ts = g_time_base_ts + elapsed_s + UTC8_OFFSET_SEC;
 
     if (current_ts == g_last_displayed_second)
@@ -106,12 +106,17 @@ static void update_clock_display(void)
     g_last_displayed_second = current_ts;
 
     uint16_t y;
-    uint8_t mo, d, h, mi, s;
+    uint8_t  mo, d, h, mi, s;
     unix_to_datetime(current_ts, &y, &mo, &d, &h, &mi, &s);
 
     lv_label_set_text_fmt(g_time_label,
-        "%04d-%02d-%02d %02d:%02d:%02d",
-        (int)y, (int)mo, (int)d, (int)h, (int)mi, (int)s);
+                          "%04d-%02d-%02d %02d:%02d:%02d",
+                          (int) y,
+                          (int) mo,
+                          (int) d,
+                          (int) h,
+                          (int) mi,
+                          (int) s);
 }
 
 /* Update MQTT data timeout warning + connection status + reset defaults on timeout */
@@ -120,7 +125,7 @@ static void update_mqtt_warning(void)
     /* ---- Timeout detection: reset data ---- */
     if (g_data_last_tick > 0)
     {
-        uint32_t now = rtos_time_get_current_system_time_ms();
+        uint32_t now     = rtos_time_get_current_system_time_ms();
         uint32_t elapsed = now - g_data_last_tick;
 
         if (elapsed > 12000)
@@ -154,22 +159,24 @@ static void update_mqtt_warning(void)
     {
         bool now_connected = g_mqtt_connected;
 
-        if ((int)now_connected != g_mqtt_prev_connected)
+        if ((int) now_connected != g_mqtt_prev_connected)
         {
-            g_mqtt_prev_connected = (int)now_connected;
+            g_mqtt_prev_connected = (int) now_connected;
             if (now_connected)
             {
                 lv_label_set_text(g_mqtt_status_label,
-                    " System Monitor  |  MQTT Connected  |  PC Dashboard v3");
+                                  " System Monitor  |  MQTT Connected  |  PC Dashboard v3");
                 lv_obj_set_style_text_color(g_mqtt_status_label,
-                    lv_color_make(0x66, 0x88, 0xAA), 0);  /* Original blue-gray */
+                                            lv_color_make(0x66, 0x88, 0xAA),
+                                            0); /* Original blue-gray */
             }
             else
             {
                 lv_label_set_text(g_mqtt_status_label,
-                    " System Monitor  |  MQTT Disconnected  |  PC Dashboard v3");
+                                  " System Monitor  |  MQTT Disconnected  |  PC Dashboard v3");
                 lv_obj_set_style_text_color(g_mqtt_status_label,
-                    lv_color_make(0xFF, 0x33, 0x33), 0);  /* Red warning */
+                                            lv_color_make(0xFF, 0x33, 0x33),
+                                            0); /* Red warning */
             }
         }
     }
@@ -222,13 +229,13 @@ static void destroy_waiting_ui(void)
  * pc_dashboard_layout.c create_layout_triad/vortex/pulse() handles UI creation
  * ======================================================================== */
 
- /* ========================================================================
-  * Build complete UI on data receipt (V3: uses layout_switch to create layout)
-  * ======================================================================== */
+/* ========================================================================
+ * Build complete UI on data receipt (V3: uses layout_switch to create layout)
+ * ======================================================================== */
 
-  /* ========================================================================
-   * Create dashboard UI (initial call)
-   * ======================================================================== */
+/* ========================================================================
+ * Create dashboard UI (initial call)
+ * ======================================================================== */
 void create_dashboard_ui(void)
 {
     /* FA icons use create_icon_lbl() for independent labels — no combined font initialization needed */
@@ -256,7 +263,7 @@ void dashboard_timer_cb(lv_timer_t* timer)
     {
         RTK_LOGI("V3_UI", "lock event -> switching to clock standby\n");
         bool use_theme_bg = layout_is_created() &&
-            (lv_obj_get_style_bg_image_src(lv_scr_act(), 0) != NULL);
+                            (lv_obj_get_style_bg_image_src(lv_scr_act(), 0) != NULL);
 
         if (use_theme_bg)
         {
@@ -331,8 +338,7 @@ void dashboard_timer_cb(lv_timer_t* timer)
         /* Timeout reached with or without pc-event: create layout */
         if (wait_ticks >= 5)
         {
-            RTK_LOGI("V3_UI", "timeout -> create layout %s (no data)\n",
-                layout_get_name(g_layout_id));
+            RTK_LOGI("V3_UI", "timeout -> create layout %s (no data)\n", layout_get_name(g_layout_id));
             wait_ticks = 0;
             destroy_waiting_ui();
             layout_switch(g_layout_id);
@@ -343,19 +349,19 @@ void dashboard_timer_cb(lv_timer_t* timer)
      * Warns if LCDC interrupts appear to have stopped */
     {
         static uint32_t s_last_frd_warn_tick = 0;
-        uint32_t now = rtos_time_get_current_system_time_ms();
-        uint32_t frd_age = now - lcdc_core_get_last_frd_tick();
+        uint32_t        now                  = rtos_time_get_current_system_time_ms();
+        uint32_t        frd_age              = now - lcdc_core_get_last_frd_tick();
         /* Skip until first FRD fires (last_frd_tick starts at 0 → false stall alarm) */
         if (lcdc_core_get_frd_count() > 0 &&
             (frd_age > 1000) && ((now - s_last_frd_warn_tick) >= 10000))
         {
             s_last_frd_warn_tick = now;
             RTK_LOGI("V3_UI",
-                "DIAG: FRD stall detected! age=%lu ms flip=%lu line=0x%lx ovr=%lu\n",
-                (unsigned long)frd_age,
-                (unsigned long)lcdc_core_get_flip_count(),
-                (unsigned long)lcdc_core_get_last_line_tick(),
-                (unsigned long)lcdc_core_get_pend_overwrite());
+                     "DIAG: FRD stall detected! age=%lu ms flip=%lu line=0x%lx ovr=%lu\n",
+                     (unsigned long) frd_age,
+                     (unsigned long) lcdc_core_get_flip_count(),
+                     (unsigned long) lcdc_core_get_last_line_tick(),
+                     (unsigned long) lcdc_core_get_pend_overwrite());
         }
     }
 
@@ -370,8 +376,7 @@ void dashboard_timer_cb(lv_timer_t* timer)
     /* First data: transition from waiting screen to dashboard */
     if (!layout_is_created())
     {
-        RTK_LOGI("V3_UI", "first data -> create layout %s\n",
-            layout_get_name(g_layout_id));
+        RTK_LOGI("V3_UI", "first data -> create layout %s\n", layout_get_name(g_layout_id));
         destroy_waiting_ui();
         layout_switch(g_layout_id);
 

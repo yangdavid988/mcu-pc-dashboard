@@ -10,13 +10,13 @@
 #include "lwip_netconf.h"
 #include "sdk_compat.h"
 
-#define RETRY_LIMIT            10
-#define RETRY_INTERVAL        5000    // ms
-#define SSID                "YOUR_WIFI_SSID"	// Replace with your Wi-Fi SSID
-#define PASSWORD            "YOUR_WIFI_PASSWORD"
+#define RETRY_LIMIT    10
+#define RETRY_INTERVAL 5000             // ms
+#define SSID           "YOUR_WIFI_SSID" // Replace with your Wi-Fi SSID
+#define PASSWORD       "YOUR_WIFI_PASSWORD"
 
-#define LED1_PIN _PA_14 //G
-#define LED2_PIN _PA_15 //R
+#define LED1_PIN _PA_14 // G
+#define LED2_PIN _PA_15 // R
 
 void gpio_led_init(void);
 void gpio_toggle(u32 GPIO_Pin, int time_ms);

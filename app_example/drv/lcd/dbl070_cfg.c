@@ -11,14 +11,14 @@ static void dbl070_pinmux(void)
 
     /* Reset */
     GPIO_InitTypeDef gpio_init;
-    gpio_init.GPIO_Pin = _PC_0;
+    gpio_init.GPIO_Pin  = _PC_0;
     gpio_init.GPIO_Mode = GPIO_Mode_OUT;
     GPIO_Init(&gpio_init);
     GPIO_WriteBit(_PC_0, 1);
     DelayMs(11);
 
     /* Display enable */
-    gpio_init.GPIO_Pin = _PB_31;
+    gpio_init.GPIO_Pin  = _PB_31;
     gpio_init.GPIO_Mode = GPIO_Mode_OUT;
     GPIO_Init(&gpio_init);
     GPIO_WriteBit(_PB_31, 1);
@@ -26,7 +26,7 @@ static void dbl070_pinmux(void)
 
     /* Backlight */
     DelayMs(100);
-    gpio_init.GPIO_Pin = _PC_1;
+    gpio_init.GPIO_Pin  = _PC_1;
     gpio_init.GPIO_Mode = GPIO_Mode_OUT;
     GPIO_Init(&gpio_init);
     GPIO_WriteBit(_PC_1, 1);
@@ -50,12 +50,12 @@ static void dbl070_pinmux(void)
     Pinmux_Config(_PA_18, PINMUX_FUNCTION_LCD_D14);
     Pinmux_Config(_PA_19, PINMUX_FUNCTION_LCD_D15);
 
-    Pinmux_Config(_PA_4,  PINMUX_FUNCTION_LCD_D16);
-    Pinmux_Config(_PA_5,  PINMUX_FUNCTION_LCD_D17);
-    Pinmux_Config(_PA_6,  PINMUX_FUNCTION_LCD_D18);
-    Pinmux_Config(_PA_7,  PINMUX_FUNCTION_LCD_D19);
-    Pinmux_Config(_PA_8,  PINMUX_FUNCTION_LCD_D20);
-    Pinmux_Config(_PA_9,  PINMUX_FUNCTION_LCD_D21);
+    Pinmux_Config(_PA_4, PINMUX_FUNCTION_LCD_D16);
+    Pinmux_Config(_PA_5, PINMUX_FUNCTION_LCD_D17);
+    Pinmux_Config(_PA_6, PINMUX_FUNCTION_LCD_D18);
+    Pinmux_Config(_PA_7, PINMUX_FUNCTION_LCD_D19);
+    Pinmux_Config(_PA_8, PINMUX_FUNCTION_LCD_D20);
+    Pinmux_Config(_PA_9, PINMUX_FUNCTION_LCD_D21);
     Pinmux_Config(_PA_10, PINMUX_FUNCTION_LCD_D22);
     Pinmux_Config(_PA_11, PINMUX_FUNCTION_LCD_D23);
 
