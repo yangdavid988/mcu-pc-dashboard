@@ -21,5 +21,12 @@ extern const lv_image_dsc_t icon_temp;
 extern const lv_image_dsc_t icon_user;
 extern const lv_image_dsc_t icon_warning;
 extern const lv_image_dsc_t icon_wifi;
+extern const lv_image_dsc_t icon_sun;
+extern const lv_image_dsc_t icon_cloud;
+extern const lv_image_dsc_t icon_rain;
+extern const lv_image_dsc_t icon_drizzle;
+extern const lv_image_dsc_t icon_thunderstorm;
+extern const lv_image_dsc_t icon_snow;
+extern const lv_image_dsc_t icon_fog;
 
 #endif /* ICONS_H */

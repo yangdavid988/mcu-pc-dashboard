@@ -32,6 +32,14 @@
 #define TASK_PRIO_LVGL (tskIDLE_PRIORITY + 3)
 #endif
 
+/* Weather task parameters */
+#ifndef TASK_STACK_WEATHER
+#define TASK_STACK_WEATHER 4096
+#endif
+#ifndef TASK_PRIO_WEATHER
+#define TASK_PRIO_WEATHER (tskIDLE_PRIORITY + 1)
+#endif
+
 /* WiFi connection thread parameters */
 #ifndef TASK_STACK_WIFI
 #define TASK_STACK_WIFI 2048
@@ -182,6 +190,17 @@ void app_example(void)
 
     /* Start PC Dashboard main task (MQTT subscribe + data processing) */
     pc_dashboard_start();
+
+    /* Create weather fetch task (periodic HTTP, auto-waits for WiFi) */
+    if (rtos_task_create(NULL,
+                         "weather_fetch",
+                         (rtos_task_t) weather_fetch_task,
+                         NULL,
+                         TASK_STACK_WEATHER,
+                         TASK_PRIO_WEATHER) != RTK_SUCCESS)
+    {
+        RTK_LOGE(TAG, "Create weather fetch task failed!\r\n");
+    }
 
     RTK_LOGI(TAG, "All tasks created.\r\n");
 }

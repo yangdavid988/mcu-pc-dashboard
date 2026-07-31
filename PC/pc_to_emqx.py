@@ -60,6 +60,7 @@ import paho.mqtt.client as mqtt
 MQTT_BROKER = "your.emqxsl.cn"
 MQTT_PORT = 8883
 MQTT_TOPIC = "pc/stats"
+MQTT_TOPIC_WEATHER = "pc/weather"
 MQTT_CLIENT_ID = "pc"
 MQTT_USERNAME = "your_user_id"
 MQTT_PASSWORD = "your_password"
@@ -778,6 +779,109 @@ def debug_loop():
                     break
                 time.sleep(1)
 
+# ---------- Weather (OpenWeatherMap, cached 10 min) ----------
+# Coordinate-based query (lat/lon) for accurate district-level weather.
+# City display name is auto-detected from API response's "name" field.
+# Set WEATHER_CITY_OVERRIDE to override auto-detected name (e.g., "Gusu District").
+_WEATHER_CACHE = None
+_WEATHER_CACHE_TIME = 0
+_WEATHER_CACHE_TTL = 600          # 10 minutes
+_WEATHER_LAST_PUBLISHED = None
+WEATHER_API_KEY = "YOUR_OPENWEATHERMAP_API_KEY"  # Get free key at https://openweathermap.org/api
+WEATHER_LAT = 31.34               # Latitude  (e.g., Gusu District, Suzhou)
+WEATHER_LON = 120.61              # Longitude
+WEATHER_CITY_OVERRIDE = ""        # Optional: empty = use API-returned "name"
+WEATHER_ENABLED = True            # False = skip weather fetch; MCU handles it via WEATHER_FETCH_MCU=1
+
+def get_weather():
+    """
+    Fetch current weather from OpenWeatherMap API via coordinate query (lat/lon).
+    Cached for _WEATHER_CACHE_TTL seconds (600s = 10 min).
+    City name is auto-detected from API response; override via WEATHER_CITY_OVERRIDE.
+    Returns a dict or None on failure.
+    """
+    global _WEATHER_CACHE, _WEATHER_CACHE_TIME
+    now = time.time()
+
+    # Return cached data if still fresh
+    if _WEATHER_CACHE is not None and (now - _WEATHER_CACHE_TIME) < _WEATHER_CACHE_TTL:
+        return _WEATHER_CACHE
+
+    if not WEATHER_ENABLED:
+        return None
+
+    try:
+        import json
+        import urllib.request
+        url = (
+            f"https://api.openweathermap.org/data/2.5/weather"
+            f"?lat={WEATHER_LAT}&lon={WEATHER_LON}"
+            f"&appid={WEATHER_API_KEY}&units=metric"
+        )
+        resp = urllib.request.urlopen(url, timeout=10)
+        data = json.loads(resp.read().decode('utf-8'))
+
+        # Auto-detect city name from API; override if configured
+        city_name = data["name"]
+        if WEATHER_CITY_OVERRIDE:
+            city_name = WEATHER_CITY_OVERRIDE
+
+        _WEATHER_CACHE = {
+            "temp_c": data["main"]["temp"],
+            "humidity": data["main"]["humidity"],
+            "wind_speed": data["wind"]["speed"],
+            "condition_code": data["weather"][0]["id"],
+            "description": data["weather"][0]["description"],
+            "city": city_name,
+        }
+        _WEATHER_CACHE_TIME = now
+        print(f"[WEATHER] Updated: {_WEATHER_CACHE['city']}, "
+              f"{_WEATHER_CACHE['description']}, "
+              f"{_WEATHER_CACHE['temp_c']:.1f}°C, "
+              f"{_WEATHER_CACHE['humidity']}%")
+        return _WEATHER_CACHE
+    except Exception as e:
+        print(f"[WEATHER] Fetch failed: {e}")
+        return _WEATHER_CACHE
+
+
+def publish_weather_if_changed(client, weather):
+    """
+    Publish weather to separate topic MQTT_TOPIC_WEATHER with retain=True
+    if the data has changed since the last publish.
+
+    With retain=True, any MCU that subscribes to pc/weather receives the
+    latest weather immediately, regardless of when it subscribed relative
+    to the publish cycle.
+
+    Returns the published snapshot dict, or None if skipped (unchanged).
+    """
+    global _WEATHER_LAST_PUBLISHED
+
+    if weather is None:
+        return None
+
+    snapshot = {
+        "weather_temp_c": weather["temp_c"],
+        "weather_humidity": weather["humidity"],
+        "weather_wind_speed": weather["wind_speed"],
+        "weather_condition_code": weather["condition_code"],
+        "weather_description": weather["description"],
+        "weather_city": weather["city"],
+    }
+
+    if snapshot == _WEATHER_LAST_PUBLISHED:
+        return None  # Unchanged, skip publish
+
+    _WEATHER_LAST_PUBLISHED = snapshot
+    payload = json.dumps(snapshot, ensure_ascii=False)
+    client.publish(MQTT_TOPIC_WEATHER, payload, qos=1, retain=True)
+    print(f"[WEATHER] Published to {MQTT_TOPIC_WEATHER}: "
+          f"{snapshot['weather_city']}, {snapshot['weather_description']}, "
+          f"{snapshot['weather_temp_c']}°C")
+    return snapshot
+
+
 # ---------- MQTT mode ----------
 def on_connect(client, userdata, flags, reason_code, properties):
     if reason_code == 0:
@@ -791,6 +895,26 @@ def on_connect(client, userdata, flags, reason_code, properties):
             print(f"[EVENT] Published initial state on connect: {'LOCK' if currently_locked else 'UNLOCK'}")
         except Exception as e:
             print(f"[WARN] Failed to publish initial state: {e}")
+        # Publish current weather on (re)connect — retained message ensures
+        # MCU gets weather immediately even if it subscribes later.
+        try:
+            weather = get_weather()
+            if weather is not None:
+                snapshot = {
+                    "weather_temp_c": weather["temp_c"],
+                    "weather_humidity": weather["humidity"],
+                    "weather_wind_speed": weather["wind_speed"],
+                    "weather_condition_code": weather["condition_code"],
+                    "weather_description": weather["description"],
+                    "weather_city": weather["city"],
+                }
+                payload = json.dumps(snapshot, ensure_ascii=False)
+                client.publish(MQTT_TOPIC_WEATHER, payload, qos=1, retain=True)
+                print(f"[WEATHER] Published on connect: "
+                      f"{snapshot['weather_city']}, {snapshot['weather_description']}, "
+                      f"{snapshot['weather_temp_c']}°C")
+        except Exception as e:
+            print(f"[WARN] Failed to publish weather on connect: {e}")
     else:
         print(f"[MQTT] Connection failed, return code: {reason_code}")
 
@@ -869,6 +993,12 @@ def mqtt_loop():
                     was_locked_before = False
                     g_last_complete = now
                     diag_log(f"[PUB] {len(payload)} bytes")
+                    # Publish weather (cached, fetched at most every 10 min)
+                    try:
+                        weather = get_weather()
+                        publish_weather_if_changed(client, weather)
+                    except Exception as e:
+                        diag_log(f"[ERROR] Weather publish: {e}")
                 else:
                     print(f"[WARN] Publish failed: {ret.rc}")
         except Exception as e:

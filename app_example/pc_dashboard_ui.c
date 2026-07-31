@@ -313,6 +313,7 @@ void dashboard_timer_cb(lv_timer_t* timer)
         update_clock_display();
         update_layout_clock();
         update_mqtt_warning();
+        update_weather_ui();
     }
 
     /* Process deferred GPIO switch requests (ISR-safe: only sets flags) */
