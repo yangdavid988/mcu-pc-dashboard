@@ -17,6 +17,7 @@
 #include "lvgl.h"
 #include "lv_timer.h"
 #include "drv/lcd/lcd_drv.h"
+#include "weather.h"
 
 /* ========================================================================
  * Project Identity
@@ -54,6 +55,8 @@
 #define MQTT_SUB_TOPIC_SHT3X "humiture/measurement" /* SHT3X temperature/humidity topic */
 #define MQTT_TOPIC_PC_EVENT  "pc/event"
 #define MQTT_SUB_TOPIC_EVENT "pc/event"
+#define MQTT_TOPIC_WEATHER   "pc/weather"
+#define MQTT_SUB_TOPIC_WEATHER "pc/weather"
 #define MQTT_BROKER_ADDRESS  "YOUR_BROKER.emqxsl.cn"
 #define MQTT_BROKER_PORT     8883
 #ifdef USE_DBL070

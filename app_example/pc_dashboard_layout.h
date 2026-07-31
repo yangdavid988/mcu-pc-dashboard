@@ -52,6 +52,9 @@ extern "C"
     /* V3 clock update — refresh clock for current layout (called from timer) */
     void update_layout_clock(void);
 
+    /* Weather UI update — refresh weather display (called from timer, independent of MQTT) */
+    void update_weather_ui(void);
+
     /* Check if layout has been created */
     bool layout_is_created(void);
 

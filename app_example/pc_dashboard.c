@@ -24,6 +24,10 @@ static rtos_task_t g_mqtt_task_handle    = NULL;
 static bool        g_sht3x_subscribed    = false; /* Whether SHT3X topic has been subscribed */
 static bool        g_pc_event_subscribed = false; /* Lock screen event subscription */
 
+#if WEATHER_FETCH_MCU == 0
+static bool g_weather_subscribed = false; /* Weather topic subscription */
+#endif
+
 /* Lock screen state */
 volatile ScreenState_t g_screen_state       = SCREEN_STATE_MONITOR;
 volatile bool          g_lock_screen_active = false;
@@ -527,6 +531,34 @@ static void parse_lock_event(const char* payload)
     }
 }
 
+#if WEATHER_FETCH_MCU == 0
+/* ========================================================================
+ * Weather JSON parser — topic "pc/weather"
+ * Payload (flat keys, published with retain=True):
+ *   {"weather_temp_c":25.3, "weather_humidity":65, "weather_wind_speed":3.5,
+ *    "weather_condition_code":800, "weather_description":"clear sky",
+ *    "weather_city":"Gusu,Jiangsu"}
+ * ======================================================================== */
+static void parse_weather_json(const char* payload)
+{
+    float w_temp                       = 0.0f;
+    float w_humi_f                     = 0.0f;
+    float w_wind                       = 0.0f;
+    char  w_desc[WEATHER_DESC_MAX_LEN] = { 0 };
+    char  w_city[WEATHER_CITY_MAX_LEN] = { 0 };
+
+    if (!json_extract_number(payload, "weather_temp_c", &w_temp))
+        return;
+
+    json_extract_number(payload, "weather_humidity", &w_humi_f);
+    json_extract_number(payload, "weather_wind_speed", &w_wind);
+    json_extract_string(payload, "weather_description", w_desc, sizeof(w_desc));
+    json_extract_string(payload, "weather_city", w_city, sizeof(w_city));
+
+    weather_update_from_mqtt(w_temp, (int) w_humi_f, w_wind, w_desc[0] ? w_desc : NULL, w_city[0] ? w_city : NULL);
+}
+#endif /* WEATHER_FETCH_MCU == 0 */
+
 /* ========================================================================
  * SHT3X JSON parser
  * ======================================================================== */
@@ -632,6 +664,21 @@ static void messageArrived(MessageData* data, void* discard)
     {
         parse_lock_event(json_buf);
     }
+#if WEATHER_FETCH_MCU == 0
+    else if (topic_len == (int) strlen(MQTT_TOPIC_WEATHER) &&
+             strncmp(topic, MQTT_TOPIC_WEATHER, topic_len) == 0)
+    {
+        /* Standby: lock status is the only MQTT data we process — weather
+         * (like stats and SHT3X) is skipped to save CPU. The retained
+         * message delivered on subscribe is handled before the retained
+         * lock (subscription order: weather → event), so the very first
+         * snapshot always reaches g_weather regardless of CLOCK mode.  */
+        if (g_screen_state != SCREEN_STATE_CLOCK)
+        {
+            parse_weather_json(json_buf);
+        }
+    }
+#endif /* WEATHER_FETCH_MCU == 0 */
     else
     {
         /* Silently ignore unmatched topics */
@@ -820,6 +867,55 @@ void pc_dashboard_task(void* parameters)
         {
             g_sht3x_subscribed = false; /* Reset on disconnect for re-subscribe on reconnect */
         }
+
+#if WEATHER_FETCH_MCU == 0
+        /* Subscribe to weather topic (BEFORE pc/event so retained weather arrives
+         * while g_screen_state is still MONITOR, before retained lock triggers CLOCK) */
+        if (g_mqtt_client.mqttstatus == MQTT_RUNNING && !g_weather_subscribed)
+        {
+            RTK_LOGI(TAG, "Subscribing to weather topic: %s\n", MQTT_SUB_TOPIC_WEATHER);
+            int sub_rc = MQTTSubscribe(&g_mqtt_client,
+                                       MQTT_SUB_TOPIC_WEATHER,
+                                       QOS0,
+                                       messageArrived);
+
+            if (sub_rc == 0)
+            {
+                int  i;
+                bool already_registered = false;
+                for (i = 0; i < MAX_MESSAGE_HANDLERS; ++i)
+                {
+                    if (g_mqtt_client.messageHandlers[i].topicFilter != NULL &&
+                        strcmp(g_mqtt_client.messageHandlers[i].topicFilter,
+                               MQTT_SUB_TOPIC_WEATHER) == 0)
+                    {
+                        already_registered = true;
+                        break;
+                    }
+                }
+                if (!already_registered)
+                {
+                    for (i = 0; i < MAX_MESSAGE_HANDLERS; ++i)
+                    {
+                        if (g_mqtt_client.messageHandlers[i].topicFilter == NULL)
+                        {
+                            g_mqtt_client.messageHandlers[i].topicFilter =
+                                MQTT_SUB_TOPIC_WEATHER;
+                            g_mqtt_client.messageHandlers[i].fp =
+                                messageArrived;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            g_weather_subscribed = true;
+        }
+        else if (g_mqtt_client.mqttstatus != MQTT_RUNNING)
+        {
+            g_weather_subscribed = false;
+        }
+#endif
 
         /* Subscribe to lock screen event topic */
         if (g_mqtt_client.mqttstatus == MQTT_RUNNING && !g_pc_event_subscribed)

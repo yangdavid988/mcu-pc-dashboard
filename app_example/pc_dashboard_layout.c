@@ -3,6 +3,7 @@
 #include "pc_dashboard_layout.h"
 #include "pc_dashboard_theme.h"
 #include "threshold_config.h"
+#include "weather.h"
 #include "img_icons/icons.h"
 #include "pc_dashboard_ui.h"
 #include "log.h"
@@ -119,6 +120,10 @@ static lv_obj_t *tr_io_read = NULL, *tr_io_write = NULL;
 static lv_obj_t *tr_net_tx = NULL, *tr_net_rx = NULL;
 static lv_obj_t *tr_sys_p = NULL, *tr_sys_c = NULL, *tr_sys_b = NULL, *tr_sys_h = NULL, *tr_sys_o = NULL;
 static lv_obj_t *tr_env_t = NULL, *tr_env_h = NULL;
+static lv_obj_t* tr_weather_info = NULL; /* outdoor weather text */
+static lv_obj_t* tr_weather_icon = NULL; /* outdoor weather icon */
+static lv_obj_t* tr_weather_main = NULL; /* outdoor weather main group name (e.g. "Clear") */
+static lv_obj_t* tr_weather_city = NULL; /* "Beijing" */
 static lv_obj_t *tr_time = NULL, *tr_user = NULL, *tr_bat_icon = NULL;
 static lv_obj_t *tr_warn_lbl = NULL, *tr_warn_icon = NULL;
 
@@ -131,6 +136,10 @@ static lv_obj_t *vo_gpu_bar = NULL, *vo_gpu_val = NULL, *vo_gpu_name = NULL, *vo
 static lv_obj_t *vo_net_tx = NULL, *vo_net_rx = NULL;
 static lv_obj_t *vo_sys_p = NULL, *vo_sys_c = NULL, *vo_sys_b = NULL, *vo_sys_h = NULL, *vo_sys_o = NULL;
 static lv_obj_t *vo_env_t = NULL, *vo_env_h = NULL;
+static lv_obj_t* vo_weather_info = NULL;
+static lv_obj_t* vo_weather_icon = NULL;
+static lv_obj_t* vo_weather_main = NULL;
+static lv_obj_t* vo_weather_city = NULL;
 static lv_obj_t *vo_time = NULL, *vo_user = NULL;
 static lv_obj_t *vo_warn_lbl = NULL, *vo_warn_icon = NULL;
 static lv_obj_t* vo_cpu_canvas = NULL; /* CPU ring canvas (inside the ring frame) */
@@ -176,6 +185,10 @@ static lv_obj_t *pu_gpu_val = NULL, *pu_gpu_sub = NULL;
 static lv_obj_t* pu_net_sub = NULL;
 static lv_obj_t *pu_sys_p = NULL, *pu_sys_c = NULL, *pu_sys_b = NULL, *pu_sys_o = NULL;
 static lv_obj_t *pu_env_t = NULL, *pu_env_h = NULL;
+static lv_obj_t* pu_weather_info = NULL;
+static lv_obj_t* pu_weather_icon = NULL;
+static lv_obj_t* pu_weather_main = NULL;
+static lv_obj_t* pu_weather_city = NULL;
 static lv_obj_t *pu_time = NULL, *pu_user = NULL;
 static lv_obj_t *pu_warn_lbl = NULL, *pu_warn_icon = NULL;
 
@@ -229,6 +242,12 @@ static char     s_last_os_platform[64] = "";
 static float s_last_env_temp = DIFF_INIT_FLT;
 static float s_last_env_humi = DIFF_INIT_FLT;
 
+/* WEATHER */
+static char  s_last_weather_city[WEATHER_CITY_MAX_LEN] = "";
+static char  s_last_weather_main[WEATHER_DESC_MAX_LEN] = "";
+static float s_last_weather_temp                       = DIFF_INIT_FLT;
+static int   s_last_weather_humi                       = DIFF_INIT_INT;
+
 /* USER */
 static char s_last_user[32] = "";
 
@@ -270,6 +289,10 @@ void reset_diff_tracking(void)
     s_last_os_platform[0] = '\0';
     s_last_env_temp       = DIFF_INIT_FLT;
     s_last_env_humi       = DIFF_INIT_FLT;
+    s_last_weather_city[0] = '\0';
+    s_last_weather_main[0] = '\0';
+    s_last_weather_temp    = DIFF_INIT_FLT;
+    s_last_weather_humi    = DIFF_INIT_INT;
     s_last_user[0]        = '\0';
     s_first               = true;
 }
@@ -290,6 +313,16 @@ void notify_layout_switched(void)
     s_anim_phase       = 0;
     reset_diff_tracking();
     reset_mqtt_status_tracking();
+
+    /* Re-trigger weather UI display so existing data shows on new layout */
+    {
+        bool has_valid = false;
+        taskENTER_CRITICAL();
+        has_valid = g_weather.valid;
+        taskEXIT_CRITICAL();
+        if (has_valid)
+            g_weather_updated = true;
+    }
 }
 
 /* ========================================================================
@@ -654,6 +687,10 @@ void destroy_current_layout(void)
                 tr_sys_o     = NULL;
                 tr_env_t     = NULL;
                 tr_env_h     = NULL;
+                tr_weather_info = NULL;
+                tr_weather_icon = NULL;
+                tr_weather_main = NULL;
+                tr_weather_city = NULL;
                 tr_time      = NULL;
                 tr_user      = NULL;
                 tr_bat_icon  = NULL;
@@ -689,6 +726,10 @@ void destroy_current_layout(void)
                 vo_sys_o      = NULL;
                 vo_env_t      = NULL;
                 vo_env_h      = NULL;
+                vo_weather_info = NULL;
+                vo_weather_icon = NULL;
+                vo_weather_main = NULL;
+                vo_weather_city = NULL;
                 vo_time       = NULL;
                 vo_user       = NULL;
                 vo_warn_lbl   = NULL;
@@ -714,6 +755,10 @@ void destroy_current_layout(void)
                 pu_sys_o     = NULL;
                 pu_env_t     = NULL;
                 pu_env_h     = NULL;
+                pu_weather_info = NULL;
+                pu_weather_icon = NULL;
+                pu_weather_main = NULL;
+                pu_weather_city = NULL;
                 pu_time      = NULL;
                 pu_user      = NULL;
                 pu_warn_lbl  = NULL;
@@ -1360,7 +1405,8 @@ void create_layout_triad(lv_obj_t* parent)
     }
 
     /* ==============================================================
-     * 6. Env bar — temperature & humidity
+     * 6. Env bar — indoor (SHT3X) + outdoor (weather)
+     *    Two-zone layout: Indoor left | Outdoor right | City name
      * ============================================================== */
     {
         int bar_w = 792;
@@ -1382,26 +1428,45 @@ void create_layout_triad(lv_obj_t* parent)
                         lv_color_make(0x0A, 0x22, 0x16),
                         lv_color_make(0x06, 0x14, 0x0C));
 
+        /* Temperature icon — shared env indicator */
         create_icon_img(bar, &icon_temp, th->env, 12, 0);
-        lv_obj_t* env_title = lv_label_create(bar);
-        lv_label_set_text(env_title, "ENV");
-        lv_obj_set_style_text_color(env_title, th->env, 0);
-        lv_obj_set_style_text_font(env_title, &lv_font_montserrat_18, 0);
-        lv_obj_align(env_title, LV_ALIGN_LEFT_MID, 46, 0);
 
+        /* --- Indoor (SHT3X): compact "28.5\xC2\xB0\x43/82\xC2\xB0\x46  60%" --- */
         lv_obj_t* temp_lbl = lv_label_create(bar);
         tr_env_t           = temp_lbl;
-        lv_label_set_text(temp_lbl, "Temp: --. \xC2\xB0\x43 / --. \xC2\xB0\x46");
+        lv_label_set_text(temp_lbl, "--.-\xC2\xB0\x43 / ---\xC2\xB0\x46  --%");
         lv_obj_set_style_text_color(temp_lbl, lv_color_make(0xAA, 0xFF, 0xCC), 0);
-        lv_obj_set_style_text_font(temp_lbl, &lv_font_montserrat_28, 0);
-        lv_obj_align(temp_lbl, LV_ALIGN_LEFT_MID, 180, 0);
+        lv_obj_set_style_text_font(temp_lbl, &lv_font_montserrat_22, 0);
+        lv_obj_align(temp_lbl, LV_ALIGN_LEFT_MID, 56, 0);
+        /* tr_env_h intentionally left NULL — humidity folded into tr_env_t */
 
-        lv_obj_t* humi_lbl = lv_label_create(bar);
-        tr_env_h           = humi_lbl;
-        lv_label_set_text(humi_lbl, "Humi: --.-%");
-        lv_obj_set_style_text_color(humi_lbl, lv_color_make(0x88, 0xDD, 0xAA), 0);
-        lv_obj_set_style_text_font(humi_lbl, &lv_font_montserrat_28, 0);
-        lv_obj_align(humi_lbl, LV_ALIGN_LEFT_MID, 580, 0);
+        /* --- Outdoor weather: icon + "Clear" + "28\xC2\xB0\x43 / 82\xC2\xB0\x46  65%" --- */
+        tr_weather_icon  = create_icon_img(bar, &icon_sun, lv_color_make(0x88, 0xCC, 0xFF), 305, 0);
+        lv_obj_t* w_main = lv_label_create(bar);
+        tr_weather_main  = w_main;
+        lv_label_set_text(w_main, "");
+        lv_obj_set_style_text_color(w_main, lv_color_make(0x88, 0xCC, 0xFF), 0);
+        lv_obj_set_style_text_font(w_main, &lv_font_montserrat_16, 0);
+        lv_label_set_long_mode(w_main, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(w_main, 85);
+        lv_obj_align(w_main, LV_ALIGN_LEFT_MID, 341, 0);
+        lv_obj_t* w_info = lv_label_create(bar);
+        tr_weather_info  = w_info;
+        lv_label_set_text(w_info, "--\xC2\xB0\x43 / ---\xC2\xB0\x46  --%");
+        lv_obj_set_style_text_color(w_info, lv_color_make(0x88, 0xCC, 0xFF), 0);
+        lv_obj_set_style_text_font(w_info, &lv_font_montserrat_22, 0);
+        lv_obj_align(w_info, LV_ALIGN_LEFT_MID, 437, 0);
+
+        /* --- City name (right-aligned, enlarged font, auto-truncate) --- */
+        lv_obj_t* w_city = lv_label_create(bar);
+        tr_weather_city  = w_city;
+        lv_label_set_text(w_city, "");
+        lv_obj_set_style_text_color(w_city, lv_color_make(0x66, 0x88, 0xAA), 0);
+        lv_obj_set_style_text_font(w_city, &lv_font_montserrat_20, 0);
+        lv_label_set_long_mode(w_city, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(w_city, 170);
+        lv_obj_set_style_text_align(w_city, LV_TEXT_ALIGN_RIGHT, 0);
+        lv_obj_align(w_city, LV_ALIGN_RIGHT_MID, -10, 0);
     }
 
     /* ==============================================================
@@ -1922,7 +1987,8 @@ void create_layout_vortex(lv_obj_t* parent)
     }
 
     /* ==============================================================
-     * 6. Env bar — temperature & humidity
+     * 6. Env bar — indoor (SHT3X) + outdoor (weather)
+     *    Two-zone layout: Indoor left | Outdoor right | City name
      * ============================================================== */
     {
         int bar_w = 792;
@@ -1944,28 +2010,46 @@ void create_layout_vortex(lv_obj_t* parent)
                         lv_color_make(0x0A, 0x22, 0x16),
                         lv_color_make(0x06, 0x14, 0x0C));
 
+        /* Temperature icon — shared env indicator */
         create_icon_img(bar, &icon_temp, th->env, 12, 0);
-        lv_obj_t* env_title = lv_label_create(bar);
-        lv_label_set_text(env_title, "ENV");
-        lv_obj_set_style_text_color(env_title, th->env, 0);
-        lv_obj_set_style_text_font(env_title, &lv_font_montserrat_18, 0);
-        lv_obj_align(env_title, LV_ALIGN_LEFT_MID, 46, 0);
 
+        /* --- Indoor (SHT3X): compact "28.5Â°C/82Â°F  60%" --- */
         lv_obj_t* temp_lbl = lv_label_create(bar);
         vo_env_t           = temp_lbl;
-        lv_label_set_text(temp_lbl, "Temp: --. \xC2\xB0\x43 / --. \xC2\xB0\x46");
+        lv_label_set_text(temp_lbl, "--.-Â°C / ---Â°F  --%");
         lv_obj_set_style_text_color(temp_lbl, lv_color_make(0xAA, 0xFF, 0xCC), 0);
-        lv_obj_set_style_text_font(temp_lbl, &lv_font_montserrat_28, 0);
-        lv_obj_align(temp_lbl, LV_ALIGN_LEFT_MID, 180, 0);
+        lv_obj_set_style_text_font(temp_lbl, &lv_font_montserrat_22, 0);
+        lv_obj_align(temp_lbl, LV_ALIGN_LEFT_MID, 56, 0);
+        /* vo_env_h intentionally left NULL — humidity folded into vo_env_t */
 
-        lv_obj_t* humi_lbl = lv_label_create(bar);
-        vo_env_h           = humi_lbl;
-        lv_label_set_text(humi_lbl, "Humi: --.-%");
-        lv_obj_set_style_text_color(humi_lbl, lv_color_make(0x88, 0xDD, 0xAA), 0);
-        lv_obj_set_style_text_font(humi_lbl, &lv_font_montserrat_28, 0);
-        lv_obj_align(humi_lbl, LV_ALIGN_LEFT_MID, 580, 0);
+        /* --- Outdoor weather: icon + "Clear" + "28Â°C / 82Â°F  65%" --- */
+        vo_weather_icon  = create_icon_img(bar, &icon_sun, lv_color_make(0x88, 0xCC, 0xFF), 305, 0);
+        lv_obj_t* w_main = lv_label_create(bar);
+        vo_weather_main  = w_main;
+        lv_label_set_text(w_main, "");
+        lv_obj_set_style_text_color(w_main, lv_color_make(0x88, 0xCC, 0xFF), 0);
+        lv_obj_set_style_text_font(w_main, &lv_font_montserrat_16, 0);
+        lv_label_set_long_mode(w_main, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(w_main, 85);
+        lv_obj_align(w_main, LV_ALIGN_LEFT_MID, 341, 0);
+        lv_obj_t* w_info = lv_label_create(bar);
+        vo_weather_info  = w_info;
+        lv_label_set_text(w_info, "--Â°C / ---Â°F  --%");
+        lv_obj_set_style_text_color(w_info, lv_color_make(0x88, 0xCC, 0xFF), 0);
+        lv_obj_set_style_text_font(w_info, &lv_font_montserrat_22, 0);
+        lv_obj_align(w_info, LV_ALIGN_LEFT_MID, 437, 0);
+
+        /* --- City name (right-aligned, enlarged font, auto-truncate) --- */
+        lv_obj_t* w_city = lv_label_create(bar);
+        vo_weather_city  = w_city;
+        lv_label_set_text(w_city, "");
+        lv_obj_set_style_text_color(w_city, lv_color_make(0x66, 0x88, 0xAA), 0);
+        lv_obj_set_style_text_font(w_city, &lv_font_montserrat_20, 0);
+        lv_label_set_long_mode(w_city, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(w_city, 170);
+        lv_obj_set_style_text_align(w_city, LV_TEXT_ALIGN_RIGHT, 0);
+        lv_obj_align(w_city, LV_ALIGN_RIGHT_MID, -10, 0);
     }
-
     /* ==============================================================
      * 7. Footer — status bar
      * ============================================================== */
@@ -2450,7 +2534,8 @@ void create_layout_pulse(lv_obj_t* parent)
     }
 
     /* ==============================================================
-     * 6. Env bar — temperature & humidity
+     * 6. Env bar — indoor (SHT3X) + outdoor (weather)
+     *    Two-zone layout: Indoor left | Outdoor right | City name
      * ============================================================== */
     {
         int bar_w = 792;
@@ -2472,26 +2557,45 @@ void create_layout_pulse(lv_obj_t* parent)
                         lv_color_make(0x0A, 0x22, 0x16),
                         lv_color_make(0x06, 0x14, 0x0C));
 
+        /* Temperature icon — shared env indicator */
         create_icon_img(bar, &icon_temp, th->env, 12, 0);
-        lv_obj_t* env_title = lv_label_create(bar);
-        lv_label_set_text(env_title, "ENV");
-        lv_obj_set_style_text_color(env_title, th->env, 0);
-        lv_obj_set_style_text_font(env_title, &lv_font_montserrat_18, 0);
-        lv_obj_align(env_title, LV_ALIGN_LEFT_MID, 46, 0);
 
+        /* --- Indoor (SHT3X): compact "28.5Â°C/82Â°F  60%" --- */
         lv_obj_t* temp_lbl = lv_label_create(bar);
         pu_env_t           = temp_lbl;
-        lv_label_set_text(temp_lbl, "Temp: --. \xC2\xB0\x43 / --. \xC2\xB0\x46");
+        lv_label_set_text(temp_lbl, "--.-Â°C / ---Â°F  --%");
         lv_obj_set_style_text_color(temp_lbl, lv_color_make(0xAA, 0xFF, 0xCC), 0);
-        lv_obj_set_style_text_font(temp_lbl, &lv_font_montserrat_28, 0);
-        lv_obj_align(temp_lbl, LV_ALIGN_LEFT_MID, 180, 0);
+        lv_obj_set_style_text_font(temp_lbl, &lv_font_montserrat_22, 0);
+        lv_obj_align(temp_lbl, LV_ALIGN_LEFT_MID, 56, 0);
+        /* pu_env_h intentionally left NULL — humidity folded into pu_env_t */
 
-        lv_obj_t* humi_lbl = lv_label_create(bar);
-        pu_env_h           = humi_lbl;
-        lv_label_set_text(humi_lbl, "Humi: --.-%");
-        lv_obj_set_style_text_color(humi_lbl, lv_color_make(0x88, 0xDD, 0xAA), 0);
-        lv_obj_set_style_text_font(humi_lbl, &lv_font_montserrat_28, 0);
-        lv_obj_align(humi_lbl, LV_ALIGN_LEFT_MID, 580, 0);
+        /* --- Outdoor weather: icon + "Clear" + "28Â°C / 82Â°F  65%" --- */
+        pu_weather_icon  = create_icon_img(bar, &icon_sun, lv_color_make(0x88, 0xCC, 0xFF), 305, 0);
+        lv_obj_t* w_main = lv_label_create(bar);
+        pu_weather_main  = w_main;
+        lv_label_set_text(w_main, "");
+        lv_obj_set_style_text_color(w_main, lv_color_make(0x88, 0xCC, 0xFF), 0);
+        lv_obj_set_style_text_font(w_main, &lv_font_montserrat_16, 0);
+        lv_label_set_long_mode(w_main, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(w_main, 85);
+        lv_obj_align(w_main, LV_ALIGN_LEFT_MID, 341, 0);
+        lv_obj_t* w_info = lv_label_create(bar);
+        pu_weather_info  = w_info;
+        lv_label_set_text(w_info, "--Â°C / ---Â°F  --%");
+        lv_obj_set_style_text_color(w_info, lv_color_make(0x88, 0xCC, 0xFF), 0);
+        lv_obj_set_style_text_font(w_info, &lv_font_montserrat_22, 0);
+        lv_obj_align(w_info, LV_ALIGN_LEFT_MID, 437, 0);
+
+        /* --- City name (right-aligned, enlarged font, auto-truncate) --- */
+        lv_obj_t* w_city = lv_label_create(bar);
+        pu_weather_city  = w_city;
+        lv_label_set_text(w_city, "");
+        lv_obj_set_style_text_color(w_city, lv_color_make(0x66, 0x88, 0xAA), 0);
+        lv_obj_set_style_text_font(w_city, &lv_font_montserrat_20, 0);
+        lv_label_set_long_mode(w_city, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(w_city, 170);
+        lv_obj_set_style_text_align(w_city, LV_TEXT_ALIGN_RIGHT, 0);
+        lv_obj_align(w_city, LV_ALIGN_RIGHT_MID, -10, 0);
     }
 
     /* ==============================================================
@@ -2983,20 +3087,14 @@ void update_layout_triad(void)
     /* ---- ENV ---- */
     if (tr_env_t && stats.sht3x_valid)
     {
-        if (stats.sht3x_temperature != s_last_env_temp)
+        if (stats.sht3x_temperature != s_last_env_temp || stats.sht3x_humidity != s_last_env_humi)
         {
-            lv_label_set_text_fmt(tr_env_t, "Temp: %.1f\xC2\xB0\x43 / %.1f\xC2\xB0\x46", stats.sht3x_temperature, stats.sht3x_temperature_f);
+            lv_label_set_text_fmt(tr_env_t, "%.1f\xC2\xB0\x43 / %.1f\xC2\xB0\x46  %.0f%%", stats.sht3x_temperature, stats.sht3x_temperature_f, stats.sht3x_humidity);
             s_last_env_temp = stats.sht3x_temperature;
-        }
-    }
-    if (tr_env_h && stats.sht3x_valid)
-    {
-        if (stats.sht3x_humidity != s_last_env_humi)
-        {
-            lv_label_set_text_fmt(tr_env_h, "Humi: %.1f%%", stats.sht3x_humidity);
             s_last_env_humi = stats.sht3x_humidity;
         }
     }
+    /* tr_env_h intentionally NULL — humidity folded into tr_env_t */
     /* Threshold guard — evaluate only after each datum has been received at least once */
     if (stats.sht3x_valid)
         s_env_data_seen = true;
@@ -3740,20 +3838,14 @@ void update_layout_vortex(void)
     /* ---- ENV ---- */
     if (vo_env_t && stats.sht3x_valid)
     {
-        if (stats.sht3x_temperature != s_last_env_temp)
+        if (stats.sht3x_temperature != s_last_env_temp || stats.sht3x_humidity != s_last_env_humi)
         {
-            lv_label_set_text_fmt(vo_env_t, "Temp: %.1f\xC2\xB0\x43 / %.1f\xC2\xB0\x46", stats.sht3x_temperature, stats.sht3x_temperature_f);
+            lv_label_set_text_fmt(vo_env_t, "%.1f\xC2\xB0\x43 / %.1f\xC2\xB0\x46  %.0f%%", stats.sht3x_temperature, stats.sht3x_temperature_f, stats.sht3x_humidity);
             s_last_env_temp = stats.sht3x_temperature;
-        }
-    }
-    if (vo_env_h && stats.sht3x_valid)
-    {
-        if (stats.sht3x_humidity != s_last_env_humi)
-        {
-            lv_label_set_text_fmt(vo_env_h, "Humi: %.1f%%", stats.sht3x_humidity);
             s_last_env_humi = stats.sht3x_humidity;
         }
     }
+    /* vo_env_h intentionally NULL — humidity folded into vo_env_t */
     /* Threshold guard — evaluate only after each datum has been received at least once */
     if (stats.sht3x_valid)
         s_env_data_seen = true;
@@ -4099,20 +4191,14 @@ void update_layout_pulse(void)
     /* ---- ENV ---- */
     if (pu_env_t && stats.sht3x_valid)
     {
-        if (stats.sht3x_temperature != s_last_env_temp)
+        if (stats.sht3x_temperature != s_last_env_temp || stats.sht3x_humidity != s_last_env_humi)
         {
-            lv_label_set_text_fmt(pu_env_t, "Temp: %.1f\xC2\xB0\x43 / %.1f\xC2\xB0\x46", stats.sht3x_temperature, stats.sht3x_temperature_f);
+            lv_label_set_text_fmt(pu_env_t, "%.1f\xC2\xB0\x43 / %.1f\xC2\xB0\x46  %.0f%%", stats.sht3x_temperature, stats.sht3x_temperature_f, stats.sht3x_humidity);
             s_last_env_temp = stats.sht3x_temperature;
-        }
-    }
-    if (pu_env_h && stats.sht3x_valid)
-    {
-        if (stats.sht3x_humidity != s_last_env_humi)
-        {
-            lv_label_set_text_fmt(pu_env_h, "Humi: %.1f%%", stats.sht3x_humidity);
             s_last_env_humi = stats.sht3x_humidity;
         }
     }
+    /* pu_env_h intentionally NULL — humidity folded into pu_env_t */
     /* Threshold guard — evaluate only after each datum has been received at least once */
     if (stats.sht3x_valid)
         s_env_data_seen = true;
@@ -4233,6 +4319,179 @@ void update_layout_clock(void)
             break;
         case LAYOUT_PULSE:
             update_clock_v3(pu_time);
+            break;
+        default:
+            break;
+    }
+}
+
+/* ========================================================================
+ * Weather icon lookup — maps OpenWeatherMap main group to the matching
+ * 32×32 A8 icon. Falls back to sun icon for unknown conditions.
+ * ======================================================================== */
+static const lv_image_dsc_t* get_weather_icon(const char* main)
+{
+    if (main == NULL || main[0] == '\0')
+        return &icon_sun;
+    if (strcmp(main, "Clear") == 0)
+        return &icon_sun;
+    if (strcmp(main, "Clouds") == 0)
+        return &icon_cloud;
+    if (strcmp(main, "Rain") == 0)
+        return &icon_rain;
+    if (strcmp(main, "Drizzle") == 0)
+        return &icon_drizzle;
+    if (strcmp(main, "Thunderstorm") == 0)
+        return &icon_thunderstorm;
+    if (strcmp(main, "Snow") == 0)
+        return &icon_snow;
+    if (strcmp(main, "Mist") == 0)
+        return &icon_fog;
+    if (strcmp(main, "Fog") == 0)
+        return &icon_fog;
+    if (strcmp(main, "Haze") == 0)
+        return &icon_fog;
+    if (strcmp(main, "Smoke") == 0)
+        return &icon_fog;
+    if (strcmp(main, "Dust") == 0)
+        return &icon_fog;
+    if (strcmp(main, "Sand") == 0)
+        return &icon_fog;
+    if (strcmp(main, "Squall") == 0)
+        return &icon_cloud;
+    if (strcmp(main, "Tornado") == 0)
+        return &icon_cloud;
+    return &icon_sun;
+}
+
+/* ========================================================================
+ * Weather UI update — called from dashboard timer callback
+ * Updates weather icon and labels independently of MQTT data flow.
+ * ======================================================================== */
+void update_weather_ui(void)
+{
+    /* ====================================================================
+     * TEST MODE: cycle through all 7 weather icons every ~5 seconds
+     * Uncomment WEATHER_ICON_TEST to enable cycling.
+     * ==================================================================== */
+    /*  #define WEATHER_ICON_TEST */
+#ifdef WEATHER_ICON_TEST
+    {
+        static unsigned int test_idx     = 0;
+        static const char*  test_main[7] = {
+            "Clear", "Clouds", "Rain", "Drizzle", "Thunderstorm", "Snow", "Fog"
+        };
+        static const float test_temp[7] = { 28, 22, 15, 12, 18, -2, 10 };
+        static const int   test_humi[7] = { 45, 70, 90, 95, 85, 80, 75 };
+
+        unsigned int idx = test_idx % 7;
+        char         info_buf[48];
+        int          w_f = (int) (test_temp[idx] * 9.0f / 5.0f + 32.0f + 0.5f);
+        snprintf(info_buf, sizeof(info_buf), "%.0f\xC2\xB0\x43 / %d\xC2\xB0\x46  %d%%", (double) test_temp[idx], w_f, test_humi[idx]);
+
+        const lv_image_dsc_t* icon = get_weather_icon(test_main[idx]);
+
+        switch (g_layout_id)
+        {
+            case LAYOUT_TRIAD:
+                if (tr_weather_info)
+                    lv_label_set_text(tr_weather_info, info_buf);
+                if (tr_weather_main)
+                    lv_label_set_text(tr_weather_main, test_main[idx]);
+                if (tr_weather_icon)
+                    lv_image_set_src(tr_weather_icon, icon);
+                break;
+            case LAYOUT_VORTEX:
+                if (vo_weather_info)
+                    lv_label_set_text(vo_weather_info, info_buf);
+                if (vo_weather_main)
+                    lv_label_set_text(vo_weather_main, test_main[idx]);
+                if (vo_weather_icon)
+                    lv_image_set_src(vo_weather_icon, icon);
+                break;
+            case LAYOUT_PULSE:
+                if (pu_weather_info)
+                    lv_label_set_text(pu_weather_info, info_buf);
+                if (pu_weather_main)
+                    lv_label_set_text(pu_weather_main, test_main[idx]);
+                if (pu_weather_icon)
+                    lv_image_set_src(pu_weather_icon, icon);
+                break;
+            default:
+                break;
+        }
+
+        test_idx++;
+        return; /* skip normal weather path during test */
+    }
+#endif
+    /* =========== END TEST MODE =========== */
+
+    if (!g_weather_updated)
+        return;
+
+    Weather_Data_t w;
+    taskENTER_CRITICAL();
+    memcpy(&w, &g_weather, sizeof(w));
+    g_weather_updated = false;
+    taskEXIT_CRITICAL();
+
+    if (!w.valid)
+        return;
+
+    /* Check if weather actually changed since last display */
+    bool city_changed = (strcmp(w.city, s_last_weather_city) != 0);
+    bool main_changed = (strcmp(w.main, s_last_weather_main) != 0);
+    bool temp_changed = (w.temp_c != s_last_weather_temp);
+    bool humi_changed = (w.humidity != s_last_weather_humi);
+
+    if (!city_changed && !main_changed && !temp_changed && !humi_changed)
+        return;
+
+    /* Update tracking */
+    strncpy(s_last_weather_city, w.city, sizeof(s_last_weather_city) - 1);
+    strncpy(s_last_weather_main, w.main, sizeof(s_last_weather_main) - 1);
+    s_last_weather_temp = w.temp_c;
+    s_last_weather_humi = w.humidity;
+
+    /* Weather info text: "28\xC2\xB0\x43 / 82\xC2\xB0\x46  65%" */
+    char info_buf[48];
+    int  w_f = (int) (w.temp_c * 9.0f / 5.0f + 32.0f + 0.5f);
+    snprintf(info_buf, sizeof(info_buf), "%.0f\xC2\xB0\x43 / %d\xC2\xB0\x46  %d%%", (double) w.temp_c, w_f, w.humidity);
+
+    const lv_image_dsc_t* icon = get_weather_icon(w.main);
+
+    switch (g_layout_id)
+    {
+        case LAYOUT_TRIAD:
+            if (tr_weather_info)
+                lv_label_set_text(tr_weather_info, info_buf);
+            if (tr_weather_main)
+                lv_label_set_text(tr_weather_main, w.main);
+            if (tr_weather_city)
+                lv_label_set_text(tr_weather_city, w.city);
+            if (tr_weather_icon)
+                lv_image_set_src(tr_weather_icon, icon);
+            break;
+        case LAYOUT_VORTEX:
+            if (vo_weather_info)
+                lv_label_set_text(vo_weather_info, info_buf);
+            if (vo_weather_main)
+                lv_label_set_text(vo_weather_main, w.main);
+            if (vo_weather_city)
+                lv_label_set_text(vo_weather_city, w.city);
+            if (vo_weather_icon)
+                lv_image_set_src(vo_weather_icon, icon);
+            break;
+        case LAYOUT_PULSE:
+            if (pu_weather_info)
+                lv_label_set_text(pu_weather_info, info_buf);
+            if (pu_weather_main)
+                lv_label_set_text(pu_weather_main, w.main);
+            if (pu_weather_city)
+                lv_label_set_text(pu_weather_city, w.city);
+            if (pu_weather_icon)
+                lv_image_set_src(pu_weather_icon, icon);
             break;
         default:
             break;
