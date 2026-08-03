@@ -8,6 +8,7 @@
 #include "platform_stdlib.h"
 #include "config/sdk_compat.h"
 #include "task.h"
+#include "cJSON.h"
 /* ========================================================================
  * OpenWeatherMap Configuration — adjust before building
  *
@@ -237,129 +238,77 @@ cleanup:
 }
 
 /* ========================================================================
- * JSON parser — minimal, tailored to OpenWeatherMap current weather response
+ * JSON parser — uses cJSON for OpenWeatherMap current weather response
  *
  * Expected response structure:
  *   {"weather":[{"main":"Clear","description":"clear sky",...}],
  *    "main":{"temp":28.5,"feels_like":26.0,"humidity":60},
  *    "wind":{"speed":3.5},
  *    "name":"Beijing"}
- *
- * We use targeted strstr to avoid needing a full JSON library.
  * ======================================================================== */
 
 /**
- * Find a string value inside a parent object.
- * Searches for "\"key\":\"value\"" within the given scope.
- * Returns the number of chars written to out, or -1 on failure.
- */
-static int json_find_string_in(const char* scope_start, const char* key, char* out, int out_size)
-{
-    char search[64];
-    snprintf(search, sizeof(search), "\"%s\":\"", key);
-
-    const char* p = strstr(scope_start, search);
-    if (!p)
-        return -1;
-
-    p += strlen(search);
-    int idx = 0;
-    while (*p && *p != '"' && idx < out_size - 1)
-    {
-        if (*p == '\\' && *(p + 1))
-            p++; /* skip escape */
-        out[idx++] = *p++;
-    }
-    out[idx] = '\0';
-    return idx;
-}
-
-/**
- * Find a number value inside a parent object.
- * Searches for "\"key\":number" within the given scope.
- * Returns true on success.
- */
-static bool json_find_number_in(const char* scope_start, const char* key, float* value)
-{
-    char search[64];
-    snprintf(search, sizeof(search), "\"%s\":", key);
-
-    const char* p = strstr(scope_start, search);
-    if (!p)
-        return false;
-
-    p += strlen(search);
-
-    /* Skip whitespace */
-    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')
-        p++;
-
-    /* Check for null */
-    if (strncmp(p, "null", 4) == 0)
-        return false;
-
-    /* Parse number */
-    char num_buf[32];
-    int  idx = 0;
-    while (*p && idx < (int) sizeof(num_buf) - 1)
-    {
-        if (*p == ',' || *p == '}' || *p == ']' || *p == ' ' || *p == '\t')
-            break;
-        num_buf[idx++] = *p++;
-    }
-    num_buf[idx] = '\0';
-
-    if (idx == 0)
-        return false;
-
-    *value = (float) atof(num_buf);
-    return true;
-}
-
-/**
- * Parse OpenWeatherMap JSON response into Weather_Data_t.
+ * Parse OpenWeatherMap JSON response into Weather_Data_t (via cJSON).
  * Returns true on success.
  */
 static bool parse_weather_json(const char* json, Weather_Data_t* out)
 {
-    const char* p;
-
     if (json == NULL || out == NULL)
         return false;
 
     memset(out, 0, sizeof(Weather_Data_t));
 
+    cJSON *root = cJSON_Parse(json);
+    if (!root)
+        return false;
+
+    cJSON *item;
+
     /* --- city name: "name":"Beijing" --- */
-    json_find_string_in(json, "name", out->city, sizeof(out->city));
+    item = cJSON_GetObjectItem(root, "name");
+    if (cJSON_IsString(item) && item->valuestring)
+        strncpy(out->city, item->valuestring, sizeof(out->city) - 1);
 
-    /* --- weather array: find first element's main + description --- */
-    p = strstr(json, "\"weather\":[");
-    if (p)
+    /* --- weather array: first element's main + description --- */
+    cJSON *weather_arr = cJSON_GetObjectItem(root, "weather");
+    if (cJSON_IsArray(weather_arr) && cJSON_GetArraySize(weather_arr) > 0)
     {
-        /* Find matching closing brace for first array element */
-        json_find_string_in(p, "main", out->main, sizeof(out->main));
-        json_find_string_in(p, "description", out->description, sizeof(out->description));
-    }
-
-    /* --- main object: temp, humidity --- */
-    p = strstr(json, "\"main\":{");
-    if (p)
-    {
-        json_find_number_in(p, "temp", &out->temp_c);
+        cJSON *weather_obj = cJSON_GetArrayItem(weather_arr, 0);
+        if (weather_obj)
         {
-            float humi_f;
-            if (json_find_number_in(p, "humidity", &humi_f))
-                out->humidity = (int) humi_f;
+            item = cJSON_GetObjectItem(weather_obj, "main");
+            if (cJSON_IsString(item) && item->valuestring)
+                strncpy(out->main, item->valuestring, sizeof(out->main) - 1);
+
+            item = cJSON_GetObjectItem(weather_obj, "description");
+            if (cJSON_IsString(item) && item->valuestring)
+                strncpy(out->description, item->valuestring, sizeof(out->description) - 1);
         }
     }
 
-    /* --- wind object: speed --- */
-    p = strstr(json, "\"wind\":{");
-    if (p)
+    /* --- main object: temp, humidity --- */
+    cJSON *main_obj = cJSON_GetObjectItem(root, "main");
+    if (cJSON_IsObject(main_obj))
     {
-        json_find_number_in(p, "speed", &out->wind_speed);
+        item = cJSON_GetObjectItem(main_obj, "temp");
+        if (cJSON_IsNumber(item))
+            out->temp_c = (float) item->valuedouble;
+
+        item = cJSON_GetObjectItem(main_obj, "humidity");
+        if (cJSON_IsNumber(item))
+            out->humidity = (int) item->valuedouble;
     }
 
+    /* --- wind object: speed --- */
+    cJSON *wind_obj = cJSON_GetObjectItem(root, "wind");
+    if (cJSON_IsObject(wind_obj))
+    {
+        item = cJSON_GetObjectItem(wind_obj, "speed");
+        if (cJSON_IsNumber(item))
+            out->wind_speed = (float) item->valuedouble;
+    }
+
+    cJSON_Delete(root);
     out->valid = true;
     return true;
 }
