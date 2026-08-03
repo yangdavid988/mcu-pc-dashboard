@@ -40,11 +40,19 @@ if (-not (Test-Path $originalBat)) {
 $shellExe = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh' } else { 'powershell' }
 
 # Clean up any leftover temp files from previous runs
-$tempBat = Join-Path $sdkRoot "_env_ps.bat"
+$tempBat = Join-Path $PSScriptRoot "_env_ps.bat"
 Remove-Item $tempBat -Force -ErrorAction SilentlyContinue
 
-# Read SDK env.bat, replace last line cmd.exe /k -> PS launch command
+# Read SDK env.bat, replace BASE_DIR and last line cmd.exe /k -> PS launch command
 $lines = Get-Content $originalBat
+
+# Since _env_ps.bat is in the demo directory, override BASE_DIR to SDK root
+for ($i = 0; $i -lt $lines.Count; $i++) {
+    if ($lines[$i] -eq 'set "BASE_DIR=%~dp0"') {
+        $lines[$i] = 'set "BASE_DIR=' + $sdkRoot + '"'
+        break
+    }
+}
 
 # If -RunCommand is specified, append to launch command tail
 $extraCmd = ""
@@ -57,14 +65,15 @@ $psCommand = "$shellExe -NoExit -Command ""& '%BASE_DIR%\.venv\Scripts\Activate.
     "function flash.py { python flash.py `$args }; " + `
     "function monitor.py { python monitor.py `$args }; " + `
     "function ameba.py { python '%BASE_DIR%\ameba.py' `$args }; " + `
-    "function bb { `$py = Join-Path (Split-Path `$env:AMEBA_ENV_PATH -Parent) 'build_flash_monitor.py'; if (Test-Path `$py) { python `$py @args } else { & ameba.py build } }; " + `
+    "function bb { ameba.py build }; " + `
     "function bm { ameba.py menuconfig }; " + `
+    "function bp { ameba.py build -p }; " + `
     "function bms { ameba.py menuconfig -s prj.conf }" + `
     "$extraCmd"""
 
 $lines[-1] = $psCommand
 
-# Write to SDK directory (so %~dp0 resolves correctly to SDK root)
+# Write to demo directory (%~dp0 is overridden, so path doesn't matter)
 $lines | Out-File -FilePath $tempBat -Encoding ascii -Force
 
 try {
