@@ -1,29 +1,40 @@
 # Please refer to path/to/your/ameba_sdk/cmake/CMakeLists-template.cmake
 
 # ===== Public: applies to ALL targets (including LVGL) =====
-# Add project directory to global include path so lv_conf_project.h is findable
+# Add project directory to global include path so config/*.h is findable
 ameba_global_include(${CMAKE_CURRENT_SOURCE_DIR})
 # Use project-specific lv_conf instead of SDK default
-ameba_global_define(LV_CONF_PATH="lv_conf_project.h")
+ameba_global_define(LV_CONF_PATH="config/lv_conf_project.h")
 
 # ===== Screen selection (uncomment the next line to switch to DBL070 instead) =====
 add_definitions(-DUSE_DBL070)
 
 # ===== Private: builds our target =====
 set(private_sources)
-ameba_list_append(private_sources app_main.c backlight_ctrl.c pc_dashboard.c pc_dashboard_ui.c pc_dashboard_lock_screen.c
- WiFi_reconnect.c pc_dashboard_theme.c pc_dashboard_layout.c gpio_control.c weather.c
-    img_icons/icon_arrow_down.c img_icons/icon_arrow_up.c img_icons/icon_battery.c img_icons/icon_bolt.c img_icons/icon_cpu.c
-    img_icons/icon_disk.c img_icons/icon_fan.c img_icons/icon_gear.c img_icons/icon_globe.c img_icons/icon_gpu.c
-    img_icons/icon_laptop.c img_icons/icon_list.c img_icons/icon_power_off.c img_icons/icon_ram.c img_icons/icon_temp.c
-    img_icons/icon_user.c img_icons/icon_warning.c img_icons/icon_wifi.c
-    img_bg/bg_cobalt.c img_bg/bg_inferno.c img_bg/bg_silicon.c img_bg/clock432.c
-    img_icons/icon_sun.c img_icons/icon_cloud.c img_icons/icon_rain.c img_icons/icon_drizzle.c
-    img_icons/icon_thunderstorm.c img_icons/icon_snow.c img_icons/icon_fog.c
-	    drv/lcd/lcd_drv.c
-	    drv/lcd/lcdc_core.c
-	    drv/lcd/st7262_cfg.c
-	    drv/lcd/dbl070_cfg.c)
+ameba_list_append(private_sources
+    # main/
+    main/app_main.c
+    # core/
+    core/pc_dashboard.c core/standby_manager.c core/weather.c core/wifi_reconnect.c
+    # ui/
+    ui/pc_dashboard_ui.c ui/pc_dashboard_lock_screen.c ui/pc_dashboard_theme.c ui/pc_dashboard_layout.c
+    # hal/
+    hal/backlight_ctrl.c hal/gpio_control.c
+    hal/lcd/lcd_drv.c hal/lcd/lcdc_core.c hal/lcd/st7262_cfg.c hal/lcd/dbl070_cfg.c
+    # assets/icons/
+    assets/icons/icon_arrow_down.c assets/icons/icon_arrow_up.c assets/icons/icon_battery.c
+    assets/icons/icon_bolt.c assets/icons/icon_cpu.c assets/icons/icon_disk.c
+    assets/icons/icon_fan.c assets/icons/icon_gear.c assets/icons/icon_globe.c
+    assets/icons/icon_gpu.c assets/icons/icon_laptop.c assets/icons/icon_list.c
+    assets/icons/icon_power_off.c assets/icons/icon_ram.c assets/icons/icon_temp.c
+    assets/icons/icon_user.c assets/icons/icon_warning.c assets/icons/icon_wifi.c
+    assets/icons/icon_sun.c assets/icons/icon_cloud.c assets/icons/icon_rain.c
+    assets/icons/icon_drizzle.c assets/icons/icon_thunderstorm.c assets/icons/icon_snow.c
+    assets/icons/icon_fog.c
+    # assets/backgrounds/
+    assets/backgrounds/bg_cobalt.c assets/backgrounds/bg_inferno.c assets/backgrounds/bg_silicon.c
+    assets/backgrounds/clock432.c
+)
 ameba_add_internal_library(app_example
     p_SOURCES
         ${private_sources}
