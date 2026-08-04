@@ -211,7 +211,7 @@ python ameba.py build
 # or with aliases: bb (build), bp (parallel build)
 ```
 
-3️⃣ **Configure Parameters** — see [Configuration Reference](#⚙️-configuration-reference) below
+3️⃣ **Configure Parameters** — see [⚙️ Configuration Reference](#configuration-reference) below
 - WiFi credentials → `wifi_reconnect.h`
 - MQTT credentials → `pc_dashboard.h`
 - Weather → `weather.c`
@@ -404,7 +404,7 @@ The MCU parses these flat keys directly using `strstr()` — no external JSON li
 
 ---
 
-### ⚙️ Configuration Reference
+### configuration-reference
 
 #### 📶 WiFi Connection
 
