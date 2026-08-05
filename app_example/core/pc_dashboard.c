@@ -2,6 +2,7 @@
 #include "config/sdk_compat.h"
 #include <time.h>
 #include "config/threshold_config.h"
+#include "cJSON.h"
 /* lwIP SNTP for time sync (fallback when no PC data) */
 /* NOTE: SDK lwipopts.h already maps SNTP_UPDATE_DELAY to sntp_get_update_interval(),
    so the interval is controlled at runtime via sntp_set_update_interval(). */
@@ -36,228 +37,22 @@ volatile bool          g_lock_screen_active = false;
 volatile bool          g_pc_event_received  = false; /* first pc/event retained msg processed */
 
 /* ========================================================================
- * Simple JSON value extractors (flat JSON format)
+ * cJSON helper — extract uint64_t from parsed JSON tree
+ *
+ * cJSON stores numbers as double (53-bit mantissa). For values that fit
+ * within 53 bits (~9×10¹⁵, i.e. several TB for disk I/O), the double
+ * representation is exact. This helper casts directly; if 64-bit fields
+ * ever exceed 2^53, switch to raw-text extraction via cJSON_Print.
  * ======================================================================== */
-
-/*
- * Extract string value: finds "key": "value" pattern
- * Returns number of characters written to out, or -1 if not found
- */
-static int json_extract_string(const char* json, const char* key, char* out, size_t out_size)
+static bool json_get_u64(const cJSON *root, const char *key, uint64_t *value)
 {
-    if (!json || !key || !out || out_size == 0)
-        return -1;
-
-    char search[64];
-    int  key_len = snprintf(search, sizeof(search), "\"%s\"", key);
-    if (key_len <= 0 || (size_t) key_len >= sizeof(search))
-        return -1;
-
-    const char* p_key = strstr(json, search);
-    if (!p_key)
-        return -1;
-
-    p_key += key_len;
-
-    /* Skip whitespace and colon */
-    while (*p_key && (*p_key == ' ' || *p_key == '\t' || *p_key == '\n' || *p_key == '\r'))
-        p_key++;
-    if (*p_key != ':')
-        return -1;
-    p_key++;
-    while (*p_key && (*p_key == ' ' || *p_key == '\t' || *p_key == '\n' || *p_key == '\r'))
-        p_key++;
-
-    /* Expect string starting with " */
-    if (*p_key != '"')
-        return -1;
-    p_key++;
-
-    size_t idx = 0;
-    while (*p_key && *p_key != '"' && idx < out_size - 1)
-    {
-        if (*p_key == '\\' && *(p_key + 1))
-        {
-            p_key++;
-            switch (*p_key)
-            {
-                case 'n':
-                    out[idx++] = '\n';
-                    break;
-                case 't':
-                    out[idx++] = '\t';
-                    break;
-                case 'r':
-                    out[idx++] = '\r';
-                    break;
-                case '\\':
-                    out[idx++] = '\\';
-                    break;
-                case '"':
-                    out[idx++] = '"';
-                    break;
-                default:
-                    out[idx++] = '\\';
-                    out[idx++] = *p_key;
-                    break;
-            }
-        }
-        else
-        {
-            out[idx++] = *p_key;
-        }
-        p_key++;
-    }
-    out[idx] = '\0';
-    return (int) idx;
-}
-
-/*
- * Extract numeric value: finds "key": number
- * Returns true on success, false on failure
- */
-static bool json_extract_number(const char* json, const char* key, float* value)
-{
-    if (!json || !key || !value)
+    if (!root || !key || !value)
         return false;
-
-    char search[64];
-    int  key_len = snprintf(search, sizeof(search), "\"%s\"", key);
-    if (key_len <= 0 || (size_t) key_len >= sizeof(search))
+    const cJSON *item = cJSON_GetObjectItem(root, key);
+    if (!cJSON_IsNumber(item))
         return false;
-
-    const char* p_key = strstr(json, search);
-    if (!p_key)
-        return false;
-
-    p_key += key_len;
-
-    /* Skip whitespace and colon */
-    while (*p_key && (*p_key == ' ' || *p_key == '\t' || *p_key == '\n' || *p_key == '\r'))
-        p_key++;
-    if (*p_key != ':')
-        return false;
-    p_key++;
-    while (*p_key && (*p_key == ' ' || *p_key == '\t' || *p_key == '\n' || *p_key == '\r'))
-        p_key++;
-
-    /* Check for null or string */
-    if (strncmp(p_key, "null", 4) == 0)
-        return false;
-    if (*p_key == '"')
-        return false; /* Value is a string, not a number */
-
-    char   num_buf[64];
-    size_t idx = 0;
-    while (*p_key && idx < sizeof(num_buf) - 1)
-    {
-        if (*p_key == ',' || *p_key == '}' || *p_key == ' ' || *p_key == '\t' ||
-            *p_key == '\n' || *p_key == '\r')
-            break;
-        num_buf[idx++] = *p_key++;
-    }
-    num_buf[idx] = '\0';
-
-    if (idx == 0)
-        return false;
-
-    *value = (float) atof(num_buf);
+    *value = (uint64_t) item->valuedouble;
     return true;
-}
-
-/*
- * Extract integer: finds "key": integer
- * Returns true on success, false on failure
- */
-static bool json_extract_int(const char* json, const char* key, int32_t* value)
-{
-    float fval;
-    if (!json_extract_number(json, key, &fval))
-        return false;
-    *value = (int32_t) fval;
-    return true;
-}
-
-/*
- * Extract boolean: finds "key": true/false
- * Returns true on success, false on failure
- */
-static bool json_extract_bool(const char* json, const char* key, bool* value)
-{
-    if (!json || !key || !value)
-        return false;
-
-    char search[64];
-    int  key_len = snprintf(search, sizeof(search), "\"%s\"", key);
-    if (key_len <= 0 || (size_t) key_len >= sizeof(search))
-        return false;
-
-    const char* p_key = strstr(json, search);
-    if (!p_key)
-        return false;
-
-    p_key += key_len;
-
-    while (*p_key && (*p_key == ' ' || *p_key == '\t' || *p_key == '\n' || *p_key == '\r'))
-        p_key++;
-    if (*p_key != ':')
-        return false;
-    p_key++;
-    while (*p_key && (*p_key == ' ' || *p_key == '\t' || *p_key == '\n' || *p_key == '\r'))
-        p_key++;
-
-    if (strncmp(p_key, "true", 4) == 0)
-    {
-        *value = true;
-        return true;
-    }
-    else if (strncmp(p_key, "false", 5) == 0)
-    {
-        *value = false;
-        return true;
-    }
-    return false;
-}
-
-/*
- * Extract uint64_t: finds "key": big_number
- * Uses strtoull directly to avoid float precision loss (>2^53 cannot be represented exactly as float)
- */
-static bool json_extract_u64(const char* json, const char* key, uint64_t* value)
-{
-    if (!json || !key || !value)
-        return false;
-
-    char search[64];
-    int  key_len = snprintf(search, sizeof(search), "\"%s\"", key);
-    if (key_len <= 0 || (size_t) key_len >= sizeof(search))
-        return false;
-
-    const char* p_key = strstr(json, search);
-    if (!p_key)
-        return false;
-
-    p_key += key_len;
-
-    /* Skip whitespace and colon */
-    while (*p_key && (*p_key == ' ' || *p_key == '\t' || *p_key == '\n' || *p_key == '\r'))
-        p_key++;
-    if (*p_key != ':')
-        return false;
-    p_key++;
-    while (*p_key && (*p_key == ' ' || *p_key == '\t' || *p_key == '\n' || *p_key == '\r'))
-        p_key++;
-
-    /* Check for null or string */
-    if (strncmp(p_key, "null", 4) == 0)
-        return false;
-    if (*p_key == '"')
-        return false;
-
-    /* Parse directly with strtoull to avoid float precision loss */
-    char* endptr = NULL;
-    *value       = strtoull(p_key, &endptr, 10);
-    return (endptr != p_key);
 }
 
 /* ========================================================================
@@ -346,7 +141,7 @@ void format_bytes(uint64_t bytes, char* out, size_t out_size)
 }
 
 /* ========================================================================
- * JSON parser: parse PC stats JSON data into g_pc_stats
+ * JSON parser: parse PC stats JSON data into g_pc_stats (via cJSON)
  * ======================================================================== */
 static void parse_pc_stats_json(const char* payload)
 {
@@ -354,141 +149,129 @@ static void parse_pc_stats_json(const char* payload)
     memset(&stats, 0, sizeof(stats));
     stats.has_data = false;
 
-    /* Parse numeric fields */
-    float   fval;
-    int32_t ival;
-    bool    bval;
+    cJSON *root = cJSON_Parse(payload);
+    if (!root)
+        return;
 
-    if (json_extract_number(payload, "cpu", &fval))
-        stats.cpu = fval;
-    if (json_extract_number(payload, "mem", &fval))
-        stats.mem = fval;
-    if (json_extract_u64(payload, "mem_total", &stats.mem_total) == false)
-        stats.mem_total = 0;
-    if (json_extract_u64(payload, "mem_used", &stats.mem_used) == false)
-        stats.mem_used = 0;
-    if (json_extract_number(payload, "disk", &fval))
-        stats.disk = fval;
-    if (json_extract_number(payload, "net_upload_kbps", &fval))
-        stats.net_upload_kbps = fval;
-    if (json_extract_number(payload, "net_download_kbps", &fval))
-        stats.net_download_kbps = fval;
+    cJSON *item;
+
+/* Helper: extract float field, optional (defaults to 0) */
+#define GET_FLOAT(key, field) do {                                  \
+        item = cJSON_GetObjectItem(root, key);                      \
+        if (cJSON_IsNumber(item)) field = (float) item->valuedouble;\
+    } while (0)
+
+/* Helper: extract float field with fallback on missing */
+#define GET_FLOAT_OR(key, field, fallback) do {                     \
+        item = cJSON_GetObjectItem(root, key);                      \
+        if (cJSON_IsNumber(item)) field = (float) item->valuedouble;\
+        else                      field = fallback;                 \
+    } while (0)
+
+/* Helper: extract string field */
+#define GET_STR(key, buf) do {                                      \
+        item = cJSON_GetObjectItem(root, key);                      \
+        if (cJSON_IsString(item) && item->valuestring) {            \
+            strncpy(buf, item->valuestring, sizeof(buf) - 1);       \
+            buf[sizeof(buf) - 1] = '\0';                            \
+        }                                                           \
+    } while (0)
+
+/* Helper: extract bool field */
+#define GET_BOOL(key, field) do {                                   \
+        item = cJSON_GetObjectItem(root, key);                      \
+        if (cJSON_IsBool(item)) field = cJSON_IsTrue(item);         \
+    } while (0)
+
+    /* Resource usage */
+    GET_FLOAT("cpu",               stats.cpu);
+    GET_FLOAT("mem",               stats.mem);
+    GET_FLOAT("disk",              stats.disk);
+    GET_FLOAT("net_upload_kbps",   stats.net_upload_kbps);
+    GET_FLOAT("net_download_kbps", stats.net_download_kbps);
+
+    /* Memory totals (uint64_t via helper) */
+    json_get_u64(root, "mem_total", &stats.mem_total);
+    json_get_u64(root, "mem_used",  &stats.mem_used);
 
     /* CPU temperature: may be null */
-    stats.cpu_temp_valid = json_extract_number(payload, "cpu_temp", &fval);
-    if (stats.cpu_temp_valid)
-        stats.cpu_temp = fval;
-    else
-        stats.cpu_temp = 0.0f;
+    item = cJSON_GetObjectItem(root, "cpu_temp");
+    stats.cpu_temp_valid = cJSON_IsNumber(item);
+    stats.cpu_temp       = stats.cpu_temp_valid ? (float) item->valuedouble : 0.0f;
 
-    /* Parse boot_time via strtoull to avoid float32 precision loss */
+    /* boot_time (uint64_t → uint32_t) */
     {
         uint64_t bt_u64 = 0;
-        if (json_extract_u64(payload, "boot_time", &bt_u64))
+        if (json_get_u64(root, "boot_time", &bt_u64))
             stats.boot_time = (uint32_t) bt_u64;
     }
-    if (json_extract_int(payload, "process_count", &ival))
-        stats.process_count = (uint32_t) ival;
-    if (json_extract_int(payload, "cpu_cores_logical", &ival))
-        stats.cpu_cores_logical = (uint8_t) ival;
-    if (json_extract_int(payload, "cpu_cores_physical", &ival))
-        stats.cpu_cores_physical = (uint8_t) ival;
-    /* Parse timestamp via strtoull to avoid float32 precision loss (2026 timestamps exceed 2^24 mantissa) */
+
+    /* Integer fields */
+    item = cJSON_GetObjectItem(root, "process_count");
+    if (cJSON_IsNumber(item))
+        stats.process_count = (uint32_t) item->valuedouble;
+
+    item = cJSON_GetObjectItem(root, "cpu_cores_logical");
+    if (cJSON_IsNumber(item))
+        stats.cpu_cores_logical = (uint8_t) item->valuedouble;
+
+    item = cJSON_GetObjectItem(root, "cpu_cores_physical");
+    if (cJSON_IsNumber(item))
+        stats.cpu_cores_physical = (uint8_t) item->valuedouble;
+
+    /* timestamp (uint64_t → uint32_t) */
     {
         uint64_t ts_u64 = 0;
-        if (json_extract_u64(payload, "timestamp", &ts_u64))
+        if (json_get_u64(root, "timestamp", &ts_u64))
             stats.timestamp = (uint32_t) ts_u64;
     }
 
-    if (json_extract_number(payload, "battery_percent", &fval))
-        stats.battery_percent = fval;
-    if (json_extract_bool(payload, "battery_plugged", &bval))
-        stats.battery_plugged = bval;
+    /* Battery */
+    GET_FLOAT("battery_percent", stats.battery_percent);
+    GET_BOOL("battery_plugged",  stats.battery_plugged);
 
-    if (json_extract_u64(payload, "disk_read_bytes", &stats.disk_read_bytes) == false)
-        stats.disk_read_bytes = 0;
-    if (json_extract_u64(payload, "disk_write_bytes", &stats.disk_write_bytes) == false)
-        stats.disk_write_bytes = 0;
+    /* Disk I/O (uint64_t) */
+    json_get_u64(root, "disk_read_bytes",  &stats.disk_read_bytes);
+    json_get_u64(root, "disk_write_bytes", &stats.disk_write_bytes);
 
     /* Username */
-    char user_buf[32] = { 0 };
-    if (json_extract_string(payload, "current_user", user_buf, sizeof(user_buf)) >= 0)
-    {
-        strncpy(stats.current_user, user_buf, sizeof(stats.current_user) - 1);
-        stats.current_user[sizeof(stats.current_user) - 1] = '\0';
-    }
+    GET_STR("current_user", stats.current_user);
 
     /* ===== V2 field parsers ===== */
 
     /* CPU frequency (negative = unavailable) */
-    if (json_extract_number(payload, "cpu_freq_current", &fval))
-        stats.cpu_freq_current = fval;
-    else
-        stats.cpu_freq_current = -1.0f;
-    if (json_extract_number(payload, "cpu_freq_min", &fval))
-        stats.cpu_freq_min = fval;
-    else
-        stats.cpu_freq_min = -1.0f;
-    if (json_extract_number(payload, "cpu_freq_max", &fval))
-        stats.cpu_freq_max = fval;
-    else
-        stats.cpu_freq_max = -1.0f;
+    GET_FLOAT_OR("cpu_freq_current", stats.cpu_freq_current, -1.0f);
+    GET_FLOAT_OR("cpu_freq_min",     stats.cpu_freq_min,     -1.0f);
+    GET_FLOAT_OR("cpu_freq_max",     stats.cpu_freq_max,     -1.0f);
 
-    /* Hostname */
-    char hostname_buf[64] = { 0 };
-    if (json_extract_string(payload, "hostname", hostname_buf, sizeof(hostname_buf)) >= 0)
-    {
-        strncpy(stats.hostname, hostname_buf, sizeof(stats.hostname) - 1);
-        stats.hostname[sizeof(stats.hostname) - 1] = '\0';
-    }
-
-    /* OS platform */
-    char os_buf[64] = { 0 };
-    if (json_extract_string(payload, "os_platform", os_buf, sizeof(os_buf)) >= 0)
-    {
-        strncpy(stats.os_platform, os_buf, sizeof(stats.os_platform) - 1);
-        stats.os_platform[sizeof(stats.os_platform) - 1] = '\0';
-    }
+    /* Hostname / OS */
+    GET_STR("hostname",    stats.hostname);
+    GET_STR("os_platform", stats.os_platform);
 
     /* Swap */
-    if (json_extract_number(payload, "swap_percent", &fval))
-        stats.swap_percent = fval;
-    if (json_extract_u64(payload, "swap_total", &stats.swap_total) == false)
-        stats.swap_total = 0;
-    if (json_extract_u64(payload, "swap_used", &stats.swap_used) == false)
-        stats.swap_used = 0;
+    GET_FLOAT("swap_percent", stats.swap_percent);
+    json_get_u64(root, "swap_total", &stats.swap_total);
+    json_get_u64(root, "swap_used",  &stats.swap_used);
 
     /* GPU info (negative = unavailable) */
-    char gpu_name_buf[64] = { 0 };
-    if (json_extract_string(payload, "gpu_name", gpu_name_buf, sizeof(gpu_name_buf)) >= 0)
-    {
-        strncpy(stats.gpu_name, gpu_name_buf, sizeof(stats.gpu_name) - 1);
-        stats.gpu_name[sizeof(stats.gpu_name) - 1] = '\0';
-    }
-    if (json_extract_number(payload, "gpu_usage", &fval))
-        stats.gpu_usage = fval;
-    else
-        stats.gpu_usage = -1.0f;
-    if (json_extract_number(payload, "gpu_mem_used_mb", &fval))
-        stats.gpu_mem_used_mb = fval;
-    else
-        stats.gpu_mem_used_mb = -1.0f;
-    if (json_extract_number(payload, "gpu_mem_total_mb", &fval))
-        stats.gpu_mem_total_mb = fval;
-    else
-        stats.gpu_mem_total_mb = -1.0f;
-    if (json_extract_number(payload, "gpu_temp_c", &fval))
-        stats.gpu_temp_c = fval;
-    else
-        stats.gpu_temp_c = -1.0f;
+    GET_STR("gpu_name", stats.gpu_name);
+    GET_FLOAT_OR("gpu_usage",        stats.gpu_usage,        -1.0f);
+    GET_FLOAT_OR("gpu_mem_used_mb",  stats.gpu_mem_used_mb,  -1.0f);
+    GET_FLOAT_OR("gpu_mem_total_mb", stats.gpu_mem_total_mb, -1.0f);
+    GET_FLOAT_OR("gpu_temp_c",       stats.gpu_temp_c,       -1.0f);
 
     /* Disk I/O utilization */
-    if (json_extract_number(payload, "disk_io_percent", &fval))
-        stats.disk_io_percent = fval;
-    else
-        stats.disk_io_percent = -1.0f;
+    GET_FLOAT_OR("disk_io_percent",  stats.disk_io_percent,  -1.0f);
+
+#undef GET_FLOAT
+#undef GET_FLOAT_OR
+#undef GET_STR
+#undef GET_BOOL
 
     stats.has_data = true;
+
+    /* Free cJSON tree before critical section — minimise interrupt-disabled time */
+    cJSON_Delete(root);
 
     /* Sample timestamp BEFORE critical section — rtos_time_* may use mutex/spinlock
      * which cannot be acquired with interrupts disabled. */
@@ -508,22 +291,26 @@ static void parse_pc_stats_json(const char* payload)
  * ======================================================================== */
 static void parse_lock_event(const char* payload)
 {
-    char event_buf[16] = { 0 };
-    if (json_extract_string(payload, "event", event_buf, sizeof(event_buf)) < 0)
-    {
+    cJSON *root = cJSON_Parse(payload);
+    if (!root)
         return;
+
+    cJSON *item = cJSON_GetObjectItem(root, "event");
+    if (cJSON_IsString(item) && item->valuestring)
+    {
+        if (strcmp(item->valuestring, "lock") == 0)
+        {
+            standby_enter();
+            RTK_LOGI(TAG, "Lock event received -> CLOCK mode\n");
+        }
+        else if (strcmp(item->valuestring, "unlock") == 0)
+        {
+            standby_exit();
+            RTK_LOGI(TAG, "Unlock event received -> MONITOR mode\n");
+        }
     }
 
-    if (strcmp(event_buf, "lock") == 0)
-    {
-        standby_enter();
-        RTK_LOGI(TAG, "Lock event received -> CLOCK mode\n");
-    }
-    else if (strcmp(event_buf, "unlock") == 0)
-    {
-        standby_exit();
-        RTK_LOGI(TAG, "Unlock event received -> MONITOR mode\n");
-    }
+    cJSON_Delete(root);
 }
 
 #if WEATHER_FETCH_MCU == 0
@@ -536,46 +323,86 @@ static void parse_lock_event(const char* payload)
  * ======================================================================== */
 static void parse_weather_json(const char* payload)
 {
-    float w_temp                       = 0.0f;
-    float w_humi_f                     = 0.0f;
-    float w_wind                       = 0.0f;
+    cJSON *root = cJSON_Parse(payload);
+    if (!root)
+        return;
+
+    cJSON *item;
+    float w_temp   = 0.0f;
+    float w_humi_f = 0.0f;
+    float w_wind   = 0.0f;
     char  w_desc[WEATHER_DESC_MAX_LEN] = { 0 };
     char  w_city[WEATHER_CITY_MAX_LEN] = { 0 };
 
-    if (!json_extract_number(payload, "weather_temp_c", &w_temp))
+    /* weather_temp_c is mandatory */
+    item = cJSON_GetObjectItem(root, "weather_temp_c");
+    if (!cJSON_IsNumber(item))
+    {
+        cJSON_Delete(root);
         return;
+    }
+    w_temp = (float) item->valuedouble;
 
-    json_extract_number(payload, "weather_humidity", &w_humi_f);
-    json_extract_number(payload, "weather_wind_speed", &w_wind);
-    json_extract_string(payload, "weather_description", w_desc, sizeof(w_desc));
-    json_extract_string(payload, "weather_city", w_city, sizeof(w_city));
+    item = cJSON_GetObjectItem(root, "weather_humidity");
+    if (cJSON_IsNumber(item))
+        w_humi_f = (float) item->valuedouble;
 
-    weather_update_from_mqtt(w_temp, (int) w_humi_f, w_wind, w_desc[0] ? w_desc : NULL, w_city[0] ? w_city : NULL);
+    item = cJSON_GetObjectItem(root, "weather_wind_speed");
+    if (cJSON_IsNumber(item))
+        w_wind = (float) item->valuedouble;
+
+    item = cJSON_GetObjectItem(root, "weather_description");
+    if (cJSON_IsString(item) && item->valuestring)
+        strncpy(w_desc, item->valuestring, sizeof(w_desc) - 1);
+
+    item = cJSON_GetObjectItem(root, "weather_city");
+    if (cJSON_IsString(item) && item->valuestring)
+        strncpy(w_city, item->valuestring, sizeof(w_city) - 1);
+
+    cJSON_Delete(root);
+
+    weather_update_from_mqtt(w_temp, (int) w_humi_f, w_wind,
+                             w_desc[0] ? w_desc : NULL,
+                             w_city[0] ? w_city : NULL);
 }
 #endif /* WEATHER_FETCH_MCU == 0 */
 
 /* ========================================================================
- * SHT3X JSON parser
+ * SHT3X JSON parser (via cJSON)
  * ======================================================================== */
 static void parse_sht3x_json(const char* payload)
 {
     float temp_val_c = 0.0f, temp_val_f = 0.0f, humi_val = 0.0f;
     bool  temp_ok = false, temp_f_ok = false, humi_ok = false;
 
-    if (json_extract_number(payload, "temperature_C", &temp_val_c))
+    cJSON *root = cJSON_Parse(payload);
+    if (!root)
+        return;
+
+    cJSON *item;
+
+    item = cJSON_GetObjectItem(root, "temperature_C");
+    if (cJSON_IsNumber(item))
     {
-        temp_ok = true;
+        temp_val_c = (float) item->valuedouble;
+        temp_ok    = true;
     }
 
-    if (json_extract_number(payload, "temperature_F", &temp_val_f))
+    item = cJSON_GetObjectItem(root, "temperature_F");
+    if (cJSON_IsNumber(item))
     {
-        temp_f_ok = true;
+        temp_val_f = (float) item->valuedouble;
+        temp_f_ok  = true;
     }
 
-    if (json_extract_number(payload, "humidity", &humi_val))
+    item = cJSON_GetObjectItem(root, "humidity");
+    if (cJSON_IsNumber(item))
     {
-        humi_ok = true;
+        humi_val = (float) item->valuedouble;
+        humi_ok  = true;
     }
+
+    cJSON_Delete(root);
 
     if (!temp_ok && !humi_ok)
     {
