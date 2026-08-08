@@ -23,3 +23,34 @@ PC/*              linguist-vendored=true
 
 # Force .h headers to be counted as C (not C++)
 *.h               linguist-language=C
+
+# Line Ending Enforcement
+# =======================
+# Base: auto-detect text vs binary
+*                 text=auto
+
+# Source code — LF
+*.c               text eol=lf
+*.h               text eol=lf
+*.py              text eol=lf
+*.md              text eol=lf
+*.json            text eol=lf
+*.txt             text eol=lf
+*.yml             text eol=lf
+*.yaml            text eol=lf
+*.conf            text eol=lf
+*.html            text eol=lf
+*.css             text eol=lf
+*.js              text eol=lf
+*.sh              text eol=lf
+CMakeLists.txt    text eol=lf
+Kconfig           text eol=lf
+.gitignore        text eol=lf
+
+# Windows scripts — CRLF (required by cmd/PowerShell)
+*.bat             text eol=crlf
+*.ps1             text eol=crlf
+
+# Binary — no conversion
+*.png             binary
+*.jpg             binary
