@@ -64,7 +64,15 @@ void weather_fetch_task(void* param);
  *  Called by parse_pc_stats_json() in pc_dashboard.c when weather_*
  *  fields are present in the MQTT payload.
  *  Sets g_weather_updated = true so the UI timer refreshes weather display. */
-void weather_update_from_mqtt(float temp_c, int humidity, float wind_speed, const char* description, const char* city);
+void weather_update_from_mqtt(float temp_c, int humidity, float wind_speed,
+                              const char* description, const char* city,
+                              const char* main_group);
 #endif
+
+/** Convert OpenWeatherMap condition code (weather[0].id) to main weather
+ *  group string, or NULL if unrecognised.
+ *  https://openweathermap.org/weather-conditions
+ *  Example: 500 → "Rain", 800 → "Clear", 802 → "Clouds" */
+const char* weather_code_to_main(int condition_code);
 
 #endif /* _WEATHER_H_ */
