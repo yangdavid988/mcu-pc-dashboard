@@ -831,6 +831,7 @@ def get_weather():
             "humidity": data["main"]["humidity"],
             "wind_speed": data["wind"]["speed"],
             "condition_code": data["weather"][0]["id"],
+            "main": data["weather"][0]["main"],
             "description": data["weather"][0]["description"],
             "city": city_name,
         }
@@ -866,8 +867,9 @@ def publish_weather_if_changed(client, weather):
         "weather_humidity": weather["humidity"],
         "weather_wind_speed": weather["wind_speed"],
         "weather_condition_code": weather["condition_code"],
-        "weather_description": weather["description"],
-        "weather_city": weather["city"],
+        "weather_main":           weather["main"],
+        "weather_description":    weather["description"],
+        "weather_city":           weather["city"],
     }
 
     if snapshot == _WEATHER_LAST_PUBLISHED:
@@ -905,8 +907,9 @@ def on_connect(client, userdata, flags, reason_code, properties):
                     "weather_humidity": weather["humidity"],
                     "weather_wind_speed": weather["wind_speed"],
                     "weather_condition_code": weather["condition_code"],
-                    "weather_description": weather["description"],
-                    "weather_city": weather["city"],
+                    "weather_main":           weather["main"],
+                    "weather_description":    weather["description"],
+                    "weather_city":           weather["city"],
                 }
                 payload = json.dumps(snapshot, ensure_ascii=False)
                 client.publish(MQTT_TOPIC_WEATHER, payload, qos=1, retain=True)

@@ -72,6 +72,25 @@ volatile bool  g_weather_updated = false;
 Weather_Data_t g_weather         = { 0 };
 
 /* ========================================================================
+ * Weather code mapping (compiled in both modes)
+ * ======================================================================== */
+
+/** Map OpenWeatherMap condition code (weather[0].id) to main weather group.
+ *  https://openweathermap.org/weather-conditions
+ *  Returns NULL if code is unrecognised. */
+const char* weather_code_to_main(int code)
+{
+    if (code >= 200 && code < 300) return "Thunderstorm";
+    if (code >= 300 && code < 400) return "Drizzle";
+    if (code >= 500 && code < 600) return "Rain";
+    if (code >= 600 && code < 700) return "Snow";
+    if (code >= 700 && code < 800) return "Mist";  /* Atmosphere group */
+    if (code == 800)                return "Clear";
+    if (code > 800 && code < 810)   return "Clouds";
+    return NULL;
+}
+
+/* ========================================================================
  * HTTP helpers — only compiled in MCU mode (WEATHER_FETCH_MCU=1)
  * In PC mode, weather data arrives via MQTT.
  * ======================================================================== */
@@ -470,23 +489,37 @@ void weather_fetch_task(void* param)
  * MQTT weather updater — called from pc_dashboard.c JSON parser
  * ======================================================================== */
 
-void weather_update_from_mqtt(float temp_c, int humidity, float wind_speed, const char* description, const char* city)
+void weather_update_from_mqtt(float temp_c, int humidity, float wind_speed,
+                              const char* description, const char* city,
+                              const char* main_group)
 {
     Weather_Data_t new_data;
     memset(&new_data, 0, sizeof(new_data));
 
+    /* Keep description whole — do NOT truncate (the old code was
+     * truncating "light rain" to "light", losing information). */
     if (description)
-    {
         strncpy(new_data.description, description, sizeof(new_data.description) - 1);
-        /* Extract main weather group from description (first word up to
-         * space/comma). OpenWeatherMap descriptions: "clear sky", "few clouds",
-         * "light rain"... */
-        {
-            char* space = strchr(new_data.description, ' ');
-            if (space)
-                *space = '\0';
-        }
-        strncpy(new_data.main, new_data.description, sizeof(new_data.main) - 1);
+
+    /* Determine main weather group, priority order:
+     *   1) Explicit main_group from PC (most reliable)
+     *   2) Fallback: derive from condition code (not available here,
+     *      handled upstream in pc_dashboard.c which passes main_group)
+     *   3) Last-resort: first word of description (legacy, matches
+     *      "Clear sky" → "Clear", but fails for "light rain" → "light") */
+    if (main_group && main_group[0] != '\0')
+    {
+        strncpy(new_data.main, main_group, sizeof(new_data.main) - 1);
+    }
+    else if (description)
+    {
+        /* Legacy fallback: first word of description.
+         * Works for "clear sky" → "Clear" (upper-case C),
+         * fails for "light rain" → "light" instead of "Rain". */
+        strncpy(new_data.main, description, sizeof(new_data.main) - 1);
+        char* space = strchr(new_data.main, ' ');
+        if (space)
+            *space = '\0';
     }
     new_data.temp_c     = temp_c;
     new_data.humidity   = humidity;

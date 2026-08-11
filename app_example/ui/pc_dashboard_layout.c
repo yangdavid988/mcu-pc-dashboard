@@ -1449,14 +1449,14 @@ void create_layout_triad(lv_obj_t* parent)
         lv_obj_set_style_text_color(w_main, lv_color_make(0x88, 0xCC, 0xFF), 0);
         lv_obj_set_style_text_font(w_main, &lv_font_montserrat_16, 0);
         lv_label_set_long_mode(w_main, LV_LABEL_LONG_DOT);
-        lv_obj_set_width(w_main, 85);
+        lv_obj_set_width(w_main, 105);
         lv_obj_align(w_main, LV_ALIGN_LEFT_MID, 341, 0);
         lv_obj_t* w_info = lv_label_create(bar);
         tr_weather_info  = w_info;
         lv_label_set_text(w_info, "--\xC2\xB0\x43 / ---\xC2\xB0\x46  --%");
         lv_obj_set_style_text_color(w_info, lv_color_make(0x88, 0xCC, 0xFF), 0);
         lv_obj_set_style_text_font(w_info, &lv_font_montserrat_22, 0);
-        lv_obj_align(w_info, LV_ALIGN_LEFT_MID, 437, 0);
+        lv_obj_align(w_info, LV_ALIGN_LEFT_MID, 451, 0);
 
         /* --- City name (right-aligned, enlarged font, auto-truncate) --- */
         lv_obj_t* w_city = lv_label_create(bar);
@@ -2031,14 +2031,14 @@ void create_layout_vortex(lv_obj_t* parent)
         lv_obj_set_style_text_color(w_main, lv_color_make(0x88, 0xCC, 0xFF), 0);
         lv_obj_set_style_text_font(w_main, &lv_font_montserrat_16, 0);
         lv_label_set_long_mode(w_main, LV_LABEL_LONG_DOT);
-        lv_obj_set_width(w_main, 85);
+        lv_obj_set_width(w_main, 105);
         lv_obj_align(w_main, LV_ALIGN_LEFT_MID, 341, 0);
         lv_obj_t* w_info = lv_label_create(bar);
         vo_weather_info  = w_info;
         lv_label_set_text(w_info, "--\xC2\xB0\x43 / ---\xC2\xB0\x46  --%");
         lv_obj_set_style_text_color(w_info, lv_color_make(0x88, 0xCC, 0xFF), 0);
         lv_obj_set_style_text_font(w_info, &lv_font_montserrat_22, 0);
-        lv_obj_align(w_info, LV_ALIGN_LEFT_MID, 437, 0);
+        lv_obj_align(w_info, LV_ALIGN_LEFT_MID, 451, 0);
 
         /* --- City name (right-aligned, enlarged font, auto-truncate) --- */
         lv_obj_t* w_city = lv_label_create(bar);
@@ -2579,14 +2579,14 @@ void create_layout_pulse(lv_obj_t* parent)
         lv_obj_set_style_text_color(w_main, lv_color_make(0x88, 0xCC, 0xFF), 0);
         lv_obj_set_style_text_font(w_main, &lv_font_montserrat_16, 0);
         lv_label_set_long_mode(w_main, LV_LABEL_LONG_DOT);
-        lv_obj_set_width(w_main, 85);
+        lv_obj_set_width(w_main, 105);
         lv_obj_align(w_main, LV_ALIGN_LEFT_MID, 341, 0);
         lv_obj_t* w_info = lv_label_create(bar);
         pu_weather_info  = w_info;
         lv_label_set_text(w_info, "--\xC2\xB0\x43 / ---\xC2\xB0\x46  --%");
         lv_obj_set_style_text_color(w_info, lv_color_make(0x88, 0xCC, 0xFF), 0);
         lv_obj_set_style_text_font(w_info, &lv_font_montserrat_22, 0);
-        lv_obj_align(w_info, LV_ALIGN_LEFT_MID, 437, 0);
+        lv_obj_align(w_info, LV_ALIGN_LEFT_MID, 451, 0);
 
         /* --- City name (right-aligned, enlarged font, auto-truncate) --- */
         lv_obj_t* w_city = lv_label_create(bar);
@@ -4471,7 +4471,7 @@ void update_weather_ui(void)
             if (tr_weather_info)
                 lv_label_set_text(tr_weather_info, info_buf);
             if (tr_weather_main)
-                lv_label_set_text(tr_weather_main, w.main);
+                lv_label_set_text(tr_weather_main, w.description);
             if (tr_weather_city)
                 lv_label_set_text(tr_weather_city, w.city);
             if (tr_weather_icon)
@@ -4481,7 +4481,7 @@ void update_weather_ui(void)
             if (vo_weather_info)
                 lv_label_set_text(vo_weather_info, info_buf);
             if (vo_weather_main)
-                lv_label_set_text(vo_weather_main, w.main);
+                lv_label_set_text(vo_weather_main, w.description);
             if (vo_weather_city)
                 lv_label_set_text(vo_weather_city, w.city);
             if (vo_weather_icon)
@@ -4491,7 +4491,7 @@ void update_weather_ui(void)
             if (pu_weather_info)
                 lv_label_set_text(pu_weather_info, info_buf);
             if (pu_weather_main)
-                lv_label_set_text(pu_weather_main, w.main);
+                lv_label_set_text(pu_weather_main, w.description);
             if (pu_weather_city)
                 lv_label_set_text(pu_weather_city, w.city);
             if (pu_weather_icon)

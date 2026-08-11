@@ -333,6 +333,7 @@ static void parse_weather_json(const char* payload)
     float w_wind   = 0.0f;
     char  w_desc[WEATHER_DESC_MAX_LEN] = { 0 };
     char  w_city[WEATHER_CITY_MAX_LEN] = { 0 };
+    char  w_main[WEATHER_DESC_MAX_LEN] = { 0 };
 
     /* weather_temp_c is mandatory */
     item = cJSON_GetObjectItem(root, "weather_temp_c");
@@ -359,11 +360,30 @@ static void parse_weather_json(const char* payload)
     if (cJSON_IsString(item) && item->valuestring)
         strncpy(w_city, item->valuestring, sizeof(w_city) - 1);
 
+    /* --- Determine main weather group --- */
+    item = cJSON_GetObjectItem(root, "weather_main");
+    if (cJSON_IsString(item) && item->valuestring)
+    {
+        strncpy(w_main, item->valuestring, sizeof(w_main) - 1);
+    }
+    if (w_main[0] == '\0')
+    {
+        /* Fallback: derive from condition code */
+        item = cJSON_GetObjectItem(root, "weather_condition_code");
+        if (cJSON_IsNumber(item))
+        {
+            const char* derived = weather_code_to_main((int) item->valuedouble);
+            if (derived)
+                strncpy(w_main, derived, sizeof(w_main) - 1);
+        }
+    }
+
     cJSON_Delete(root);
 
     weather_update_from_mqtt(w_temp, (int) w_humi_f, w_wind,
                              w_desc[0] ? w_desc : NULL,
-                             w_city[0] ? w_city : NULL);
+                             w_city[0] ? w_city : NULL,
+                             w_main[0] ? w_main : NULL);
 }
 #endif /* WEATHER_FETCH_MCU == 0 */
 
