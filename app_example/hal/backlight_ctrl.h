@@ -3,17 +3,18 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "config/threshold_config.h"  /* BL_MIN_PCT, BL_STEP_PCT, BRIGHTNESS_* */
 
 /* ========================================================================
  * Backlight brightness control
  *
  * Uses TIM4 channel 0 with mbed hardware PWM.
  *
- * Runtime brightness can be adjusted via backlight_adjust() — clamped
- * automatically to BL_MIN_PCT (10 %) .. 100 %.
- *
  * Compile-time defaults (threshold_config.h) serve as the initial value
  * only; runtime changes never modify the header.
+ *
+ * Clamp limits (BL_MIN_PCT, BL_STEP_PCT) are also defined in
+ * config/threshold_config.h — adjust them there for all consumers.
  *
  * API:
  *   backlight_init()               — one-time init
@@ -21,10 +22,9 @@
  *   backlight_set(percent)         — direct ..100 override
  *   backlight_adjust(delta)        — step up/down, clamped to [BL_MIN_PCT, 100]
  *   backlight_get()                — query current %
+ *   backlight_fade_tick()          — advance gradual dim (call from LVGL timer)
  * ======================================================================== */
 
-#define BL_MIN_PCT  10 /* lowest allowed brightness (hard floor) — 0 % may corrupt timer if written */
-#define BL_STEP_PCT 10 /* step size for backlight_adjust() */
 
 /** Init TIM4 hardware PWM backlight */
 void backlight_init(void);
@@ -40,5 +40,9 @@ void backlight_adjust(int delta);
 
 /** Get current brightness level (0..100) */
 int backlight_get(void);
+
+/** Advance gradual fade one step if enough time has elapsed.
+ *  Call periodically (e.g. from LVGL timer callback) during standby fade. */
+void backlight_fade_tick(void);
 
 #endif /* BACKLIGHT_CTRL_H */

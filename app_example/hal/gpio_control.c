@@ -13,10 +13,6 @@
 #define GPIO_DEBOUNCE_MS   250
 #define BRIGHTNESS_LONG_MS 2000 /* hold ≥ 2 s → jump to min / max */
 
-/* ===== Brightness clamp (must match backlight_ctrl.h) ===== */
-#define BL_MIN_PCT  10 /* must match backlight_ctrl.h */
-#define BL_STEP_PCT 10
-
 /* ========================================================================
  * ISR-safe timestamp helper
  * ======================================================================== */
@@ -33,20 +29,16 @@ static gpio_irq_t gpio_theme;
 static volatile bool g_pending_layout_switch = false;
 static volatile bool g_pending_theme_switch  = false;
 
-/* ===== ISR debounce timestamps ===== */
-static volatile uint32_t g_last_layout_ms = 0;
-static volatile uint32_t g_last_theme_ms  = 0;
-
 /* ========================================================================
  * Brightness buttons — pin mapping depends on platform
  * ======================================================================== */
 
 /* DBL070: PB_15 = up, PB_17 = down
  * ST7262: PA_21 = up, PA_27 = down */
-#ifdef USE_DBL070
+#ifdef CONFIG_SCREEN_DBL070
 #define BL_UP_PIN   _PB_15
 #define BL_DOWN_PIN _PB_17
-#else
+#elif defined(CONFIG_SCREEN_ST7262)
 #define BL_UP_PIN   _PA_21
 #define BL_DOWN_PIN _PA_27
 #endif
@@ -168,67 +160,83 @@ void brightness_osd_show(int percent)
 }
 
 /* ========================================================================
- * Layout switch ISR
+ * Unified GPIO button ISR — decodes which pin triggered from the event
+ * parameter (see ameba_gpio.c encoding) and dispatches accordingly.
  * ======================================================================== */
-static void layout_irq_handler(uint32_t id, uint32_t event)
+static void button_irq_handler(uint32_t id, uint32_t event)
 {
     (void) id;
-    (void) event;
-
-    /* Standby mode: layout/theme buttons are hardware-disabled via
-     * gpio_irq_set(). This guard catches any stale NVIC pending that
-     * fires during the resume re-enable sequence. */
-    if (g_ui_buttons_disabled)
-        return;
 
     uint32_t now = isr_safe_tick_ms();
-    if (now - g_last_layout_ms < GPIO_DEBOUNCE_MS)
+
+    /* Decode which pin triggered from event parameter */
+    uint8_t port = (event >> 21) & 0x3;
+    uint8_t pin  = (event >> 16) & 0x1F;
+
+    /* Debounce: per-pin last-tick storage */
+    static uint32_t s_last_tick[3][32] = {0};
+    if (now - s_last_tick[port][pin] < GPIO_DEBOUNCE_MS)
         return;
-    g_last_layout_ms = now;
+    s_last_tick[port][pin] = now;
 
-    g_pending_layout_switch = true;
-}
-
-/* ========================================================================
- * Theme switch ISR
- * ======================================================================== */
-static void theme_irq_handler(uint32_t id, uint32_t event)
-{
-    (void) id;
-    (void) event;
-
-    /* Standby mode: guard against stale NVIC pending — see layout_irq_handler. */
-    if (g_ui_buttons_disabled)
+#ifdef CONFIG_SCREEN_DBL070
+    /* DBL070: all 4 buttons on Port B */
+    if (port != 1) /* not Port B */
         return;
 
-    uint32_t now = isr_safe_tick_ms();
-    if (now - g_last_theme_ms < GPIO_DEBOUNCE_MS)
-        return;
-    g_last_theme_ms = now;
-
-    g_pending_theme_switch = true;
-}
-
-/* ========================================================================
- * Brightness up ISR (falling edge = press)
- * ======================================================================== */
-static void bl_up_irq_handler(uint32_t id, uint32_t event)
-{
-    (void) id;
-    (void) event;
-    g_bl_up_press_ms = isr_safe_tick_ms();
-    g_pending_bl_up  = true;
-}
-
-/* ========================================================================
- * Brightness down ISR (falling edge = press)
- * ======================================================================== */
-static void bl_down_irq_handler(uint32_t id, uint32_t event)
-{
-    (void) id;
-    (void) event;
-    g_bl_down_press_ms = isr_safe_tick_ms();
-    g_pending_bl_down  = true;
+    switch (pin)
+    {
+    case 16: /* PB_16 = Layout */
+        if (g_ui_buttons_disabled)
+            return;
+        g_pending_layout_switch = true;
+        break;
+    case 14: /* PB_14 = Theme */
+        if (g_ui_buttons_disabled)
+            return;
+        g_pending_theme_switch = true;
+        break;
+    case 15: /* PB_15 = Brightness UP */
+        g_bl_up_press_ms = now;
+        g_pending_bl_up  = true;
+        break;
+    case 17: /* PB_17 = Brightness DOWN */
+        g_bl_down_press_ms = now;
+        g_pending_bl_down  = true;
+        break;
+    default:
+        break;
+    }
+#elif defined(CONFIG_SCREEN_ST7262)
+    /* ST7262: buttons on Port A (PA_21, PA_27, PA_31) and Port B (PB_0) */
+    if (port == 0) /* Port A */
+    {
+        switch (pin)
+        {
+        case 21: /* PA_21 = Brightness UP */
+            g_bl_up_press_ms = now;
+            g_pending_bl_up  = true;
+            break;
+        case 27: /* PA_27 = Brightness DOWN */
+            g_bl_down_press_ms = now;
+            g_pending_bl_down  = true;
+            break;
+        case 31: /* PA_31 = Theme */
+            if (g_ui_buttons_disabled)
+                return;
+            g_pending_theme_switch = true;
+            break;
+        default:
+            break;
+        }
+    }
+    else if (port == 1 && pin == 0) /* PB_0 = Layout */
+    {
+        if (g_ui_buttons_disabled)
+            return;
+        g_pending_layout_switch = true;
+    }
+#endif /* CONFIG_SCREEN_* */
 }
 
 /* ========================================================================
@@ -319,35 +327,35 @@ process_brightness:
 void gpio_control_init(void)
 {
     /* ---- Layout / Theme buttons ---- */
-#ifdef USE_DBL070
-    gpio_irq_init(&gpio_layout, _PB_16, layout_irq_handler, 0);
+#ifdef CONFIG_SCREEN_DBL070
+    gpio_irq_init(&gpio_layout, _PB_16, button_irq_handler, 0);
     gpio_irq_pull_ctrl(&gpio_layout, PullUp);
     gpio_irq_set(&gpio_layout, IRQ_FALL, 1);
     gpio_irq_enable(&gpio_layout);
 
-    gpio_irq_init(&gpio_theme, _PB_14, theme_irq_handler, 0);
+    gpio_irq_init(&gpio_theme, _PB_14, button_irq_handler, 0);
     gpio_irq_pull_ctrl(&gpio_theme, PullUp);
     gpio_irq_set(&gpio_theme, IRQ_FALL, 1);
     gpio_irq_enable(&gpio_theme);
-#else
-    gpio_irq_init(&gpio_layout, _PB_0, layout_irq_handler, 0);
+#elif defined(CONFIG_SCREEN_ST7262)
+    gpio_irq_init(&gpio_layout, _PB_0, button_irq_handler, 0);
     gpio_irq_pull_ctrl(&gpio_layout, PullDown);
     gpio_irq_set(&gpio_layout, IRQ_FALL, 1);
     gpio_irq_enable(&gpio_layout);
 
-    gpio_irq_init(&gpio_theme, _PA_31, theme_irq_handler, 0);
+    gpio_irq_init(&gpio_theme, _PA_31, button_irq_handler, 0);
     gpio_irq_pull_ctrl(&gpio_theme, PullDown);
     gpio_irq_set(&gpio_theme, IRQ_FALL, 1);
     gpio_irq_enable(&gpio_theme);
 #endif
 
     /* ---- Brightness +/- buttons ---- */
-    gpio_irq_init(&gpio_bl_up, BL_UP_PIN, bl_up_irq_handler, 0);
+    gpio_irq_init(&gpio_bl_up, BL_UP_PIN, button_irq_handler, 0);
     gpio_irq_pull_ctrl(&gpio_bl_up, PullUp);
     gpio_irq_set(&gpio_bl_up, IRQ_FALL, 1);
     gpio_irq_enable(&gpio_bl_up);
 
-    gpio_irq_init(&gpio_bl_down, BL_DOWN_PIN, bl_down_irq_handler, 0);
+    gpio_irq_init(&gpio_bl_down, BL_DOWN_PIN, button_irq_handler, 0);
     gpio_irq_pull_ctrl(&gpio_bl_down, PullUp);
     gpio_irq_set(&gpio_bl_down, IRQ_FALL, 1);
     gpio_irq_enable(&gpio_bl_down);

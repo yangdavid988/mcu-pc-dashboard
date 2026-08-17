@@ -3,7 +3,9 @@
 #include "ui/pc_dashboard_theme.h"
 #include "ui/pc_dashboard_lock_screen.h"
 #include "hal/gpio_control.h"
+#include "hal/backlight_ctrl.h"
 #include "hal/lcd/lcdc_core.h"
+#include "core/wifi_reconnect.h" /* g_wifi_retry_* */
 // #include <math.h>
 
 /*
@@ -41,6 +43,10 @@ lv_timer_t* g_dashboard_timer = NULL;
 /* --- Waiting screen --- */
 static lv_obj_t* g_waiting_container = NULL;
 
+/* --- WiFi retry exhausted popup --- */
+static lv_obj_t* g_wifi_popup     = NULL;
+static lv_obj_t* g_wifi_popup_msg = NULL; /* label for retry progress text */
+
 /* --- Header --- */
 static lv_obj_t* g_time_label    = NULL;
 static lv_obj_t* g_warning_label = NULL; /* Data timeout warning */
@@ -73,9 +79,16 @@ static bool g_timeout_triggered = false; /* Avoid duplicate reset triggers */
 lv_obj_t*  g_mqtt_status_label   = NULL;
 static int g_mqtt_prev_connected = -1; /* -1 = uninitialized, ensures first trigger always fires */
 
+#ifdef CONFIG_USB_CDC_MODE
+static int s_usb_prev_connected = -1; /* USB CDC state tracking */
+#endif
+
 void reset_mqtt_status_tracking(void)
 {
     g_mqtt_prev_connected = -1;
+#ifdef CONFIG_USB_CDC_MODE
+    s_usb_prev_connected = -1;
+#endif
 }
 
 /* ========================================================================
@@ -129,7 +142,7 @@ static void update_mqtt_warning(void)
         uint32_t now     = rtos_time_get_current_system_time_ms();
         uint32_t elapsed = now - g_data_last_tick;
 
-        if (elapsed > 12000)
+        if (elapsed > CONNECTION_TIMEOUT_MS)
         {
             /* Timeout > 12s: show warning */
             if (g_warning_label != NULL)
@@ -158,7 +171,46 @@ static void update_mqtt_warning(void)
     /* ---- MQTT connection status label ---- */
     if (g_mqtt_status_label != NULL)
     {
+#ifdef CONFIG_USB_CDC_MODE
+        /* USB CDC mode: no WiFi/MQTT, show USB status based on data freshness.
+         * Uses the same 12s timeout as the NO DATA warning above.            */
+        {
+            bool usb_connected = (g_data_last_tick > 0) &&
+                                 ((rtos_time_get_current_system_time_ms() - g_data_last_tick) <= CONNECTION_TIMEOUT_MS);
+            if ((int) usb_connected != s_usb_prev_connected)
+            {
+                s_usb_prev_connected = (int) usb_connected;
+                if (usb_connected)
+                {
+                    lv_label_set_text(g_mqtt_status_label,
+                                      " System Monitor  |  USB Connected  |  PC Dashboard v3");
+                    lv_obj_set_style_text_color(g_mqtt_status_label,
+                                                lv_color_make(0x66, 0x88, 0xAA),
+                                                0); /* Blue-gray */
+                }
+                else
+                {
+                    lv_label_set_text(g_mqtt_status_label,
+                                      " System Monitor  |  USB Disconnected  |  PC Dashboard v3");
+                    lv_obj_set_style_text_color(g_mqtt_status_label,
+                                                lv_color_make(0xFF, 0x33, 0x33),
+                                                0); /* Red warning */
+                }
+            }
+        }
+#else
+        /* Check both MQTT socket status AND data freshness:
+         * If the MQTT socket is "connected" but no data has arrived for 12s,
+         * the PC script either died or is unresponsive — treat as disconnected.
+         * This correctly handles the case where pc_to_emqx.py closes but the
+         * MCU-to-broker TCP connection stays alive.                         */
         bool now_connected = g_mqtt_connected;
+        if (now_connected && g_data_last_tick > 0)
+        {
+            uint32_t now = rtos_time_get_current_system_time_ms();
+            if ((now - g_data_last_tick) > CONNECTION_TIMEOUT_MS)
+                now_connected = false;
+        }
 
         if ((int) now_connected != g_mqtt_prev_connected)
         {
@@ -180,6 +232,7 @@ static void update_mqtt_warning(void)
                                             0); /* Red warning */
             }
         }
+#endif /* CONFIG_USB_CDC_MODE */
     }
 }
 
@@ -210,7 +263,11 @@ static void create_waiting_ui(void)
     lv_obj_align(wait_label, LV_ALIGN_CENTER, 0, -10);
 
     lv_obj_t* hint = lv_label_create(g_waiting_container);
+#ifdef CONFIG_USB_CDC_MODE
+    lv_label_set_text(hint, "USB CDC: Run PC/pc_to_usb.py");
+#else
     lv_label_set_text(hint, "MQTT: pc/stats | humiture/measurement");
+#endif
     lv_obj_set_style_text_color(hint, lv_color_make(0x55, 0x55, 0x77), 0);
     lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
     lv_obj_align(hint, LV_ALIGN_CENTER, 0, 50);
@@ -261,6 +318,9 @@ void dashboard_timer_cb(lv_timer_t* timer)
      * ================================================================== */
     gpio_control_process();
 
+    /* Backlight gradual fade tick — runs in ALL modes during fade */
+    backlight_fade_tick();
+
     /* ==================================================================
      * Lock screen state machine — MUST come before layout-dependent calls
      * to avoid accessing dangling widget pointers after destroy.
@@ -298,6 +358,13 @@ void dashboard_timer_cb(lv_timer_t* timer)
         destroy_current_layout();
         destroy_waiting_ui();
         reset_mqtt_status_tracking();
+        /* Destroy WiFi popup if present */
+        if (g_wifi_popup != NULL)
+        {
+            lv_obj_delete(g_wifi_popup);
+            g_wifi_popup     = NULL;
+            g_wifi_popup_msg = NULL;
+        }
         create_lock_screen_clock();
         g_lock_screen_active = true;
         return;
@@ -309,6 +376,8 @@ void dashboard_timer_cb(lv_timer_t* timer)
         RTK_LOGI("V3_UI", "unlock event -> fade transition to monitor\n");
         /* First create the monitor layout BEHIND the clock UI */
         reset_mqtt_status_tracking();
+        g_data_last_tick    = rtos_time_get_current_system_time_ms();
+        g_timeout_triggered = false;
         notify_layout_switched();
         destroy_waiting_ui();
         layout_switch(g_layout_id);
@@ -337,6 +406,90 @@ void dashboard_timer_cb(lv_timer_t* timer)
         update_weather_ui();
     }
 
+    /* ---- WiFi retry exhausted popup ---- */
+#ifndef CONFIG_USB_CDC_MODE
+    if (!g_wifi_connected)
+    {
+        /* Detect orphan: if popup's parent screen is no longer the active
+         * screen (e.g. after waiting → monitor transition via layout_switch),
+         * the object was auto-destroyed.  Reset pointers so we re-create. */
+        if (g_wifi_popup != NULL && lv_obj_get_screen(g_wifi_popup) != lv_scr_act())
+        {
+            g_wifi_popup     = NULL;
+            g_wifi_popup_msg = NULL;
+        }
+
+        if (g_wifi_popup == NULL)
+        {
+            lv_obj_t* scr = lv_scr_act();
+
+            g_wifi_popup = lv_obj_create(scr);
+            lv_obj_set_size(g_wifi_popup, 340, 160);
+            lv_obj_center(g_wifi_popup);
+            lv_obj_set_style_radius(g_wifi_popup, 12, 0);
+            lv_obj_set_style_bg_color(g_wifi_popup, lv_color_make(0x11, 0x11, 0x22), 0);
+            lv_obj_set_style_border_color(g_wifi_popup, lv_color_make(0xFF, 0x44, 0x44), 0);
+            lv_obj_set_style_border_width(g_wifi_popup, 1, 0);
+            lv_obj_set_style_pad_all(g_wifi_popup, 16, 0);
+            lv_obj_remove_flag(g_wifi_popup, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_move_foreground(g_wifi_popup);
+
+            /* Icon */
+            lv_obj_t* icon = lv_label_create(g_wifi_popup);
+            lv_label_set_text(icon, LV_SYMBOL_WARNING);
+            lv_obj_set_style_text_color(icon, lv_color_make(0xFF, 0x66, 0x00), 0);
+            lv_obj_set_style_text_font(icon, &lv_font_montserrat_32, 0);
+            lv_obj_align(icon, LV_ALIGN_TOP_LEFT, 0, 0);
+
+            /* Title */
+            lv_obj_t* title = lv_label_create(g_wifi_popup);
+            lv_label_set_text(title, "Network Error");
+            lv_obj_set_style_text_color(title, lv_color_make(0xFF, 0xFF, 0xFF), 0);
+            lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
+            lv_obj_align(title, LV_ALIGN_TOP_LEFT, 40, 2);
+
+            /* Message (updated every tick — progress or exhausted) */
+            g_wifi_popup_msg = lv_label_create(g_wifi_popup);
+            lv_obj_set_style_text_color(g_wifi_popup_msg, lv_color_make(0xAA, 0xAA, 0xCC), 0);
+            lv_obj_set_style_text_font(g_wifi_popup_msg, &lv_font_montserrat_14, 0);
+            lv_obj_align(g_wifi_popup_msg, LV_ALIGN_LEFT_MID, 0, 12);
+        }
+        else
+        {
+            /* Keep popup on top — layout_switch may have added new widgets
+             * (layout/theme change via GPIO button) which would otherwise
+             * cover the popup since they are children of the same screen.   */
+            lv_obj_move_foreground(g_wifi_popup);
+        }
+
+        /* Update message every tick */
+        if (g_wifi_retry_exhausted)
+        {
+            lv_label_set_text_fmt(g_wifi_popup_msg,
+                                  "WiFi connection failed after\n multiple attempts(%d/%d).\n"
+                                  "Please check your AP router, and then\n     reboot the device.",
+                                  (int) g_wifi_retry_current,
+                                  (int) g_wifi_retry_max);
+        }
+        else
+        {
+            lv_label_set_text_fmt(g_wifi_popup_msg,
+                                  "Reconnecting... (%d/%d)",
+                                  (int) g_wifi_retry_current,
+                                  (int) g_wifi_retry_max);
+        }
+    }
+    else
+    {
+        if (g_wifi_popup != NULL)
+        {
+            lv_obj_delete(g_wifi_popup);
+            g_wifi_popup     = NULL;
+            g_wifi_popup_msg = NULL;
+        }
+    }
+#endif /* !CONFIG_USB_CDC_MODE */
+
     /* GPIO deferred processing now runs at top of callback (line 270) */
 
     /* Auto-transition from waiting screen after ~5 seconds even without MQTT data.
@@ -344,27 +497,41 @@ void dashboard_timer_cb(lv_timer_t* timer)
      * Initial-state guard: if pc/event retained msg hasn't arrived yet, delay
      * auto-create to avoid briefly showing MONITOR then flashing to CLOCK
      * when the MCU booted while the PC was locked. Fallback after 15s to
-     * handle the case where no PC script is running at all. */
+     * handle the case where no PC script is running at all.
+     *
+     * MQTT mode optimisation: once WiFi connects, skip the wait and switch
+     * to monitor immediately — the welcome page is only for WiFi connection. */
     if (!layout_is_created())
     {
-        static int wait_ticks = 0;
-        wait_ticks++;
-
-        /* Keep waiting for retained pc/event (up to 15s) before deciding */
-        if (!g_pc_event_received && wait_ticks < 15)
+        /* MQTT mode: switch to monitor as soon as WiFi is connected */
+        if (g_wifi_connected)
         {
-            return;
-        }
-
-        /* Timeout reached with or without pc-event: create layout */
-        if (wait_ticks >= 5)
-        {
-            RTK_LOGI("V3_UI", "timeout -> create layout %s (no data)\n", layout_get_name(g_layout_id));
-            wait_ticks = 0;
+            RTK_LOGI("V3_UI", "wifi connected -> create layout %s (no data)\n", layout_get_name(g_layout_id));
             destroy_waiting_ui();
             layout_switch(g_layout_id);
+            /* Fall through to the update path below */
         }
-        /* else: wait_ticks < 5, pc-event received — fall through to data path */;
+        else
+        {
+            static int wait_ticks = 0;
+            wait_ticks++;
+
+            /* Keep waiting for retained pc/event (up to 15s) before deciding */
+            if (!g_pc_event_received && wait_ticks < 15)
+            {
+                return;
+            }
+
+            /* Timeout reached with or without pc-event: create layout */
+            if (wait_ticks >= 5)
+            {
+                RTK_LOGI("V3_UI", "timeout -> create layout %s (no data)\n", layout_get_name(g_layout_id));
+                wait_ticks = 0;
+                destroy_waiting_ui();
+                layout_switch(g_layout_id);
+            }
+            /* else: wait_ticks < 5, pc-event received — fall through to data path */;
+        }
     }
 
     /* FRD/line stall detection (immediate, outside throttle)
@@ -390,7 +557,7 @@ void dashboard_timer_cb(lv_timer_t* timer)
     /* Atomically check and clear flag — prevents race with MQTT writer (pc_dashboard.c)
      * which sets g_new_data_ready = true inside taskENTER_CRITICAL(). */
     taskENTER_CRITICAL();
-    bool new_data = g_new_data_ready;
+    bool new_data    = g_new_data_ready;
     g_new_data_ready = false;
     taskEXIT_CRITICAL();
 

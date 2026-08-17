@@ -1,13 +1,13 @@
 #include "lcd_drv.h"
 
 /* ========================================================================
- * Screen selection: compile-time switch via #ifdef USE_DBL070
+ * Screen selection: compile-time switch via #ifdef CONFIG_SCREEN_DBL070
  * Each screen provides one lcdc_screen_cfg_t configuration table
  * ======================================================================== */
-#ifdef USE_DBL070
+#ifdef CONFIG_SCREEN_DBL070
 #include "dbl070_cfg.h"
 #define SCREEN_CFG (&g_dbl070_cfg)
-#else
+#elif defined(CONFIG_SCREEN_ST7262)
 #include "st7262_cfg.h"
 #define SCREEN_CFG (&g_st7262_cfg)
 #endif

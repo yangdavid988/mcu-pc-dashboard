@@ -3,14 +3,16 @@
 #include <time.h>
 #include "config/threshold_config.h"
 #include "cJSON.h"
-/* lwIP SNTP for time sync (fallback when no PC data) */
-/* NOTE: SDK lwipopts.h already maps SNTP_UPDATE_DELAY to sntp_get_update_interval(),
-   so the interval is controlled at runtime via sntp_set_update_interval(). */
+/* lwIP SNTP for time sync (fallback when no PC data) — only used in MQTT mode;
+   the header path is unavailable when WiFi Kconfig symbols are disabled.       */
+#ifndef CONFIG_USB_CDC_MODE
 #include "lwip/apps/sntp.h"
-/* Realtek SNTP component (time-of-day thin wrapper, provides set_update_interval) */
 #include "sntp/sntp_api.h"
+#include "core/wifi_reconnect.h"
+#endif /* !CONFIG_USB_CDC_MODE */
 #include "hal/gpio_control.h"
 #include "core/standby_manager.h"
+#include "core/weather.h" /* weather_update_data, WEATHER_DESC/CITY */
 
 /* ========================================================================
  * Global variables
@@ -21,7 +23,8 @@ volatile bool     g_sht3x_pending  = false;
 volatile bool     g_mqtt_connected = false;
 volatile uint32_t g_data_last_tick = 0;
 
-/* Internal globals */
+/* Internal globals — MQTT-only (not compiled in USB CDC mode) */
+#ifndef CONFIG_USB_CDC_MODE
 static MQTTClient  g_mqtt_client;
 static rtos_task_t g_mqtt_task_handle    = NULL;
 static bool        g_sht3x_subscribed    = false; /* Whether SHT3X topic has been subscribed */
@@ -30,11 +33,14 @@ static bool        g_pc_event_subscribed = false; /* Lock screen event subscript
 #if WEATHER_FETCH_MCU == 0
 static bool g_weather_subscribed = false; /* Weather topic subscription */
 #endif
+#endif /* !CONFIG_USB_CDC_MODE */
 
 /* Lock screen state */
-volatile ScreenState_t g_screen_state       = SCREEN_STATE_MONITOR;
-volatile bool          g_lock_screen_active = false;
-volatile bool          g_pc_event_received  = false; /* first pc/event retained msg processed */
+volatile ScreenState_t g_screen_state         = SCREEN_STATE_MONITOR;
+volatile bool          g_lock_screen_active   = false;
+volatile bool          g_pc_event_received    = false; /* first pc/event retained msg processed */
+volatile bool          g_wifi_connected       = false; /* MQTT mode: true after WiFi + DHCP succeeds */
+volatile bool          g_wifi_retry_exhausted = false; /* MQTT mode: true when WiFi retries exhausted */
 
 /* ========================================================================
  * cJSON helper — extract uint64_t from parsed JSON tree
@@ -44,11 +50,11 @@ volatile bool          g_pc_event_received  = false; /* first pc/event retained 
  * representation is exact. This helper casts directly; if 64-bit fields
  * ever exceed 2^53, switch to raw-text extraction via cJSON_Print.
  * ======================================================================== */
-static bool json_get_u64(const cJSON *root, const char *key, uint64_t *value)
+static bool json_get_u64(const cJSON* root, const char* key, uint64_t* value)
 {
     if (!root || !key || !value)
         return false;
-    const cJSON *item = cJSON_GetObjectItem(root, key);
+    const cJSON* item = cJSON_GetObjectItem(root, key);
     if (!cJSON_IsNumber(item))
         return false;
     *value = (uint64_t) item->valuedouble;
@@ -143,59 +149,72 @@ void format_bytes(uint64_t bytes, char* out, size_t out_size)
 /* ========================================================================
  * JSON parser: parse PC stats JSON data into g_pc_stats (via cJSON)
  * ======================================================================== */
-static void parse_pc_stats_json(const char* payload)
+void parse_pc_stats_json(const char* payload)
 {
     PC_Stats_t stats;
     memset(&stats, 0, sizeof(stats));
     stats.has_data = false;
 
-    cJSON *root = cJSON_Parse(payload);
+    cJSON* root = cJSON_Parse(payload);
     if (!root)
         return;
 
-    cJSON *item;
+    cJSON* item;
 
 /* Helper: extract float field, optional (defaults to 0) */
-#define GET_FLOAT(key, field) do {                                  \
-        item = cJSON_GetObjectItem(root, key);                      \
-        if (cJSON_IsNumber(item)) field = (float) item->valuedouble;\
+#define GET_FLOAT(key, field)                  \
+    do                                         \
+    {                                          \
+        item = cJSON_GetObjectItem(root, key); \
+        if (cJSON_IsNumber(item))              \
+            field = (float) item->valuedouble; \
     } while (0)
 
 /* Helper: extract float field with fallback on missing */
-#define GET_FLOAT_OR(key, field, fallback) do {                     \
-        item = cJSON_GetObjectItem(root, key);                      \
-        if (cJSON_IsNumber(item)) field = (float) item->valuedouble;\
-        else                      field = fallback;                 \
+#define GET_FLOAT_OR(key, field, fallback)     \
+    do                                         \
+    {                                          \
+        item = cJSON_GetObjectItem(root, key); \
+        if (cJSON_IsNumber(item))              \
+            field = (float) item->valuedouble; \
+        else                                   \
+            field = fallback;                  \
     } while (0)
 
 /* Helper: extract string field */
-#define GET_STR(key, buf) do {                                      \
-        item = cJSON_GetObjectItem(root, key);                      \
-        if (cJSON_IsString(item) && item->valuestring) {            \
-            strncpy(buf, item->valuestring, sizeof(buf) - 1);       \
-            buf[sizeof(buf) - 1] = '\0';                            \
-        }                                                           \
+#define GET_STR(key, buf)                                     \
+    do                                                        \
+    {                                                         \
+        item = cJSON_GetObjectItem(root, key);                \
+        if (cJSON_IsString(item) && item->valuestring)        \
+        {                                                     \
+            strncpy(buf, item->valuestring, sizeof(buf) - 1); \
+            buf[sizeof(buf) - 1] = '\0';                      \
+        }                                                     \
     } while (0)
 
 /* Helper: extract bool field */
-#define GET_BOOL(key, field) do {                                   \
-        item = cJSON_GetObjectItem(root, key);                      \
-        if (cJSON_IsBool(item)) field = cJSON_IsTrue(item);         \
+#define GET_BOOL(key, field)                   \
+    do                                         \
+    {                                          \
+        item = cJSON_GetObjectItem(root, key); \
+        if (cJSON_IsBool(item))                \
+            field = cJSON_IsTrue(item);        \
     } while (0)
 
     /* Resource usage */
-    GET_FLOAT("cpu",               stats.cpu);
-    GET_FLOAT("mem",               stats.mem);
-    GET_FLOAT("disk",              stats.disk);
-    GET_FLOAT("net_upload_kbps",   stats.net_upload_kbps);
+    GET_FLOAT("cpu", stats.cpu);
+    GET_FLOAT("mem", stats.mem);
+    GET_FLOAT("disk", stats.disk);
+    GET_FLOAT("net_upload_kbps", stats.net_upload_kbps);
     GET_FLOAT("net_download_kbps", stats.net_download_kbps);
 
     /* Memory totals (uint64_t via helper) */
     json_get_u64(root, "mem_total", &stats.mem_total);
-    json_get_u64(root, "mem_used",  &stats.mem_used);
+    json_get_u64(root, "mem_used", &stats.mem_used);
 
     /* CPU temperature: may be null */
-    item = cJSON_GetObjectItem(root, "cpu_temp");
+    item                 = cJSON_GetObjectItem(root, "cpu_temp");
     stats.cpu_temp_valid = cJSON_IsNumber(item);
     stats.cpu_temp       = stats.cpu_temp_valid ? (float) item->valuedouble : 0.0f;
 
@@ -228,10 +247,10 @@ static void parse_pc_stats_json(const char* payload)
 
     /* Battery */
     GET_FLOAT("battery_percent", stats.battery_percent);
-    GET_BOOL("battery_plugged",  stats.battery_plugged);
+    GET_BOOL("battery_plugged", stats.battery_plugged);
 
     /* Disk I/O (uint64_t) */
-    json_get_u64(root, "disk_read_bytes",  &stats.disk_read_bytes);
+    json_get_u64(root, "disk_read_bytes", &stats.disk_read_bytes);
     json_get_u64(root, "disk_write_bytes", &stats.disk_write_bytes);
 
     /* Username */
@@ -241,27 +260,84 @@ static void parse_pc_stats_json(const char* payload)
 
     /* CPU frequency (negative = unavailable) */
     GET_FLOAT_OR("cpu_freq_current", stats.cpu_freq_current, -1.0f);
-    GET_FLOAT_OR("cpu_freq_min",     stats.cpu_freq_min,     -1.0f);
-    GET_FLOAT_OR("cpu_freq_max",     stats.cpu_freq_max,     -1.0f);
+    GET_FLOAT_OR("cpu_freq_min", stats.cpu_freq_min, -1.0f);
+    GET_FLOAT_OR("cpu_freq_max", stats.cpu_freq_max, -1.0f);
 
     /* Hostname / OS */
-    GET_STR("hostname",    stats.hostname);
+    GET_STR("hostname", stats.hostname);
     GET_STR("os_platform", stats.os_platform);
 
     /* Swap */
     GET_FLOAT("swap_percent", stats.swap_percent);
     json_get_u64(root, "swap_total", &stats.swap_total);
-    json_get_u64(root, "swap_used",  &stats.swap_used);
+    json_get_u64(root, "swap_used", &stats.swap_used);
 
     /* GPU info (negative = unavailable) */
     GET_STR("gpu_name", stats.gpu_name);
-    GET_FLOAT_OR("gpu_usage",        stats.gpu_usage,        -1.0f);
-    GET_FLOAT_OR("gpu_mem_used_mb",  stats.gpu_mem_used_mb,  -1.0f);
+    GET_FLOAT_OR("gpu_usage", stats.gpu_usage, -1.0f);
+    GET_FLOAT_OR("gpu_mem_used_mb", stats.gpu_mem_used_mb, -1.0f);
     GET_FLOAT_OR("gpu_mem_total_mb", stats.gpu_mem_total_mb, -1.0f);
-    GET_FLOAT_OR("gpu_temp_c",       stats.gpu_temp_c,       -1.0f);
+    GET_FLOAT_OR("gpu_temp_c", stats.gpu_temp_c, -1.0f);
 
     /* Disk I/O utilization */
-    GET_FLOAT_OR("disk_io_percent",  stats.disk_io_percent,  -1.0f);
+    GET_FLOAT_OR("disk_io_percent", stats.disk_io_percent, -1.0f);
+
+    /* ===== USB CDC fields (from pc_to_usb.py JSON via USB cable) ===== */
+
+    /* SHT3X — PC forwards from MQTT humiture/measurement topic */
+    GET_FLOAT("sht3x_temperature", stats.sht3x_temperature);
+    GET_FLOAT("sht3x_temperature_f", stats.sht3x_temperature_f);
+    GET_FLOAT("sht3x_humidity", stats.sht3x_humidity);
+    item              = cJSON_GetObjectItem(root, "sht3x_temperature");
+    stats.sht3x_valid = cJSON_IsNumber(item);
+
+    /* Weather — PC fetches from OpenWeatherMap, embeds in USB JSON */
+    {
+        float _w_temp                       = 0.0f;
+        int   _w_humi                       = 0;
+        float _w_wind                       = 0.0f;
+        char  _w_desc[WEATHER_DESC_MAX_LEN] = { 0 };
+        char  _w_city[WEATHER_CITY_MAX_LEN] = { 0 };
+        char  _w_main[WEATHER_DESC_MAX_LEN] = { 0 };
+        bool  _w_has_temp                   = false;
+
+        /* Don't shadow 'item' from outer scope — use local _wi */
+        cJSON* _wi = cJSON_GetObjectItem(root, "weather_temp_c");
+        if (cJSON_IsNumber(_wi))
+        {
+            _w_temp     = (float) _wi->valuedouble;
+            _w_has_temp = true;
+        }
+
+        _wi = cJSON_GetObjectItem(root, "weather_humidity");
+        if (cJSON_IsNumber(_wi))
+            _w_humi = (int) _wi->valuedouble;
+
+        /* Reuse GET_FLOAT / GET_STR macros (these set outer 'item', that's OK) */
+        GET_FLOAT("weather_wind_speed", _w_wind);
+        GET_STR("weather_description", _w_desc);
+        GET_STR("weather_city", _w_city);
+
+        /* --- Determine main weather group ---
+         * Priority: 1) explicit weather_main, 2) condition code, 3) NULL */
+        GET_STR("weather_main", _w_main);
+        if (_w_main[0] == '\0')
+        {
+            /* Fallback: derive from condition code */
+            cJSON* _w_ci = cJSON_GetObjectItem(root, "weather_condition_code");
+            if (cJSON_IsNumber(_w_ci))
+            {
+                const char* derived = weather_code_to_main((int) _w_ci->valuedouble);
+                if (derived)
+                    strncpy(_w_main, derived, sizeof(_w_main) - 1);
+            }
+        }
+
+        if (_w_has_temp)
+        {
+            weather_update_data(_w_temp, _w_humi, _w_wind, _w_desc[0] ? _w_desc : NULL, _w_city[0] ? _w_city : NULL, _w_main[0] ? _w_main : NULL);
+        }
+    }
 
 #undef GET_FLOAT
 #undef GET_FLOAT_OR
@@ -286,16 +362,21 @@ static void parse_pc_stats_json(const char* payload)
 }
 
 /* ========================================================================
+ * MQTT-only functions below — not compiled in USB CDC mode
+ * ======================================================================== */
+#ifndef CONFIG_USB_CDC_MODE
+
+/* ========================================================================
  * Lock screen event parser — topic "pc/event"
  * Payload: {"event": "lock", "timestamp": 1234567890}
  * ======================================================================== */
 static void parse_lock_event(const char* payload)
 {
-    cJSON *root = cJSON_Parse(payload);
+    cJSON* root = cJSON_Parse(payload);
     if (!root)
         return;
 
-    cJSON *item = cJSON_GetObjectItem(root, "event");
+    cJSON* item = cJSON_GetObjectItem(root, "event");
     if (cJSON_IsString(item) && item->valuestring)
     {
         if (strcmp(item->valuestring, "lock") == 0)
@@ -307,6 +388,16 @@ static void parse_lock_event(const char* payload)
         {
             standby_exit();
             RTK_LOGI(TAG, "Unlock event received -> MONITOR mode\n");
+        }
+        else if (strcmp(item->valuestring, "disconnect") == 0)
+        {
+            RTK_LOGI(TAG, "Disconnect event received\n");
+            /* Set last_tick to an artificially old value so the very next
+             * UI timer tick detects the timeout and shows "Disconnected"
+             * immediately — no need to wait for CONNECTION_TIMEOUT_MS.    */
+            uint32_t now     = rtos_time_get_current_system_time_ms();
+            g_data_last_tick = now - CONNECTION_TIMEOUT_MS - 1000;
+            pc_stats_reset_to_default();
         }
     }
 
@@ -323,17 +414,17 @@ static void parse_lock_event(const char* payload)
  * ======================================================================== */
 static void parse_weather_json(const char* payload)
 {
-    cJSON *root = cJSON_Parse(payload);
+    cJSON* root = cJSON_Parse(payload);
     if (!root)
         return;
 
-    cJSON *item;
-    float w_temp   = 0.0f;
-    float w_humi_f = 0.0f;
-    float w_wind   = 0.0f;
-    char  w_desc[WEATHER_DESC_MAX_LEN] = { 0 };
-    char  w_city[WEATHER_CITY_MAX_LEN] = { 0 };
-    char  w_main[WEATHER_DESC_MAX_LEN] = { 0 };
+    cJSON* item;
+    float  w_temp                       = 0.0f;
+    float  w_humi_f                     = 0.0f;
+    float  w_wind                       = 0.0f;
+    char   w_desc[WEATHER_DESC_MAX_LEN] = { 0 };
+    char   w_city[WEATHER_CITY_MAX_LEN] = { 0 };
+    char   w_main[WEATHER_DESC_MAX_LEN] = { 0 };
 
     /* weather_temp_c is mandatory */
     item = cJSON_GetObjectItem(root, "weather_temp_c");
@@ -380,10 +471,7 @@ static void parse_weather_json(const char* payload)
 
     cJSON_Delete(root);
 
-    weather_update_from_mqtt(w_temp, (int) w_humi_f, w_wind,
-                             w_desc[0] ? w_desc : NULL,
-                             w_city[0] ? w_city : NULL,
-                             w_main[0] ? w_main : NULL);
+    weather_update_data(w_temp, (int) w_humi_f, w_wind, w_desc[0] ? w_desc : NULL, w_city[0] ? w_city : NULL, w_main[0] ? w_main : NULL);
 }
 #endif /* WEATHER_FETCH_MCU == 0 */
 
@@ -395,11 +483,11 @@ static void parse_sht3x_json(const char* payload)
     float temp_val_c = 0.0f, temp_val_f = 0.0f, humi_val = 0.0f;
     bool  temp_ok = false, temp_f_ok = false, humi_ok = false;
 
-    cJSON *root = cJSON_Parse(payload);
+    cJSON* root = cJSON_Parse(payload);
     if (!root)
         return;
 
-    cJSON *item;
+    cJSON* item;
 
     item = cJSON_GetObjectItem(root, "temperature_C");
     if (cJSON_IsNumber(item))
@@ -537,6 +625,8 @@ static void messageArrived(MessageData* data, void* discard)
     }
 }
 
+#endif /* !CONFIG_USB_CDC_MODE */
+
 /* ========================================================================
  * Reset g_pc_stats to defaults (called on MQTT disconnect)
  * ======================================================================== */
@@ -566,6 +656,11 @@ void pc_stats_reset_to_default(void)
 }
 
 /* ========================================================================
+ * MQTT task / start / stop — not compiled in USB CDC mode
+ * ======================================================================== */
+#ifndef CONFIG_USB_CDC_MODE
+
+/* ========================================================================
  * MQTT main task
  * ======================================================================== */
 void pc_dashboard_task(void* parameters)
@@ -588,10 +683,17 @@ void pc_dashboard_task(void* parameters)
 
     RTK_LOGI(TAG, "Wait Wi-Fi to be connected...\n");
 
-    /* Wait for Wi-Fi connection */
-    while (COMPAT_CHECK_CONNECTIVITY(NETIF_WLAN_STA_INDEX) != CONNECTION_VALID)
+    /* Wait for Wi-Fi connection via g_wifi_connected flag */
+    while (!g_wifi_connected && !g_wifi_retry_exhausted)
     {
-        rtos_time_delay_ms(2000);
+        wifi_retry_periodic_check();
+        rtos_time_delay_ms(500);
+    }
+
+    if (g_wifi_retry_exhausted)
+    {
+        RTK_LOGI(TAG, "WiFi initial connect failed (exhausted).\n");
+        goto skip_sntp;
     }
 
     RTK_LOGI(TAG, "Wi-Fi connected.\n");
@@ -602,6 +704,8 @@ void pc_dashboard_task(void* parameters)
     sntp_setservername(0, "ntp.aliyun.com");
     sntp_init();
     RTK_LOGI(TAG, "SNTP initialized (server: ntp.aliyun.com)\n");
+
+skip_sntp:
 
     /* Network / MQTT client initialization */
     NetworkInit(&network);
@@ -622,6 +726,50 @@ void pc_dashboard_task(void* parameters)
     /* Main loop */
     while (1)
     {
+        if (!g_wifi_connected)
+        {
+            /* Tear down MQTT if it still thinks it is connected */
+            if (g_mqtt_client.mqttstatus == MQTT_RUNNING)
+            {
+                if ((g_mqtt_client.ipstack != NULL) &&
+                    (g_mqtt_client.ipstack->disconnect != NULL))
+                {
+                    g_mqtt_client.ipstack->disconnect(g_mqtt_client.ipstack);
+                }
+                g_mqtt_client.mqttstatus = MQTT_START;
+            }
+            g_mqtt_connected = false;
+
+            if (g_wifi_retry_exhausted)
+            {
+                /* Retries exhausted — park MQTT until WiFi recovers */
+                RTK_LOGI(TAG, "WiFi retry exhausted — pausing MQTT\n");
+                pc_stats_reset_to_default();
+
+                while (!g_wifi_connected)
+                {
+                    wifi_retry_periodic_check();
+                    rtos_time_delay_ms(5000);
+                }
+
+                /* WiFi came back — force re-subscribe on next MQTT cycle */
+                g_sht3x_subscribed = false;
+#if WEATHER_FETCH_MCU == 0
+                g_weather_subscribed = false;
+#endif
+                g_pc_event_subscribed = false;
+                RTK_LOGI(TAG, "WiFi reconnected — resuming MQTT\n");
+            }
+            else
+            {
+                /* Retries still in progress — update counters for UI popup,
+                 * then skip this MQTT cycle.                               */
+                wifi_retry_periodic_check();
+                rtos_time_delay_ms(1000);
+                continue;
+            }
+        }
+
         fd_set         read_fds;
         fd_set         except_fds;
         struct timeval timeout;
@@ -870,3 +1018,5 @@ void pc_dashboard_stop(void)
 
     RTK_LOGI(TAG, "PC dashboard stopped.\n");
 }
+
+#endif /* !CONFIG_USB_CDC_MODE */

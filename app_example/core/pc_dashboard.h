@@ -12,13 +12,18 @@
 #include "log.h"
 #include "FreeRTOS.h"
 #include "task.h"
+/* MQTTClient.h is only needed for MQTT mode — unavailable when WiFi
+   Kconfig symbols are disabled (USB CDC mode).                          */
+#ifndef CONFIG_USB_CDC_MODE
 #include "MQTTClient.h"
+#endif
 #include "gpio_api.h"
 #include "device.h"
 #include "lvgl.h"
 #include "lv_timer.h"
 #include "hal/lcd/lcd_drv.h"
 #include "core/weather.h"       /* Outdoor weather via OpenWeatherMap API */
+#include "config/threshold_config.h"  /* UI_UPDATE_INTERVAL_MS, CONNECTION_TIMEOUT_MS */
 /* ========================================================================
  * Project Identity
  * ======================================================================== */
@@ -59,18 +64,17 @@
 #define MQTT_SUB_TOPIC_WEATHER      "pc/weather"
 #define MQTT_BROKER_ADDRESS         "YOUR_BROKER.emqxsl.cn"
 #define MQTT_BROKER_PORT            8883
-#ifdef USE_DBL070
+#ifdef CONFIG_SCREEN_DBL070
 #define MQTT_CLIENT_ID              "PC_DASHBOARD_MCU_1_COM19"
-#else
+#elif defined(CONFIG_SCREEN_ST7262)
 #define MQTT_CLIENT_ID              "PC_DASHBOARD_MCU_2_COM18"
 #endif
 #define MQTT_USERNAME               "YOUR_MQTT_USERNAME"
 #define MQTT_PASSWORD               "YOUR_MQTT_PASSWORD"
 
 /* ========================================================================
- * UI Update Interval (ms)
+ * UI Update Interval (ms) — defined in threshold_config.h
  * ======================================================================== */
-#define UI_UPDATE_INTERVAL_MS       1000             /* Clock updates every second, data refreshes only on new arrival */
 #define UTC8_OFFSET_SEC             28800            /* UTC+8 offset (8 hours) */
 
  /* ========================================================================
@@ -168,6 +172,9 @@ extern volatile uint32_t g_data_last_tick;          /* System tick (ms) when las
 /* Reset g_pc_stats to defaults (called on MQTT disconnect) */
 void pc_stats_reset_to_default(void);
 
+/* Parse PC stats JSON (exposed for USB CDC receiver) */
+void parse_pc_stats_json(const char* payload);
+
 /* ========================================================================
  * Clock time base (set by pc_dashboard_ui.c, used by V3 layout update functions)
  * ======================================================================== */
@@ -197,6 +204,8 @@ void format_bytes(uint64_t bytes, char* out, size_t out_size);
 extern volatile ScreenState_t g_screen_state;
 extern volatile bool          g_lock_screen_active;
 extern volatile bool          g_pc_event_received;  /* true once first pc/event retained msg is processed */
+extern volatile bool          g_wifi_connected;     /* MQTT mode: true after WiFi + DHCP succeeds */
+extern volatile bool          g_wifi_retry_exhausted; /* MQTT mode: true when WiFi retries exhausted */
 
 /* Redefine mqtt_printf with MQTT_INFO threshold (suppress DEBUG, keep INFO+).
  * MUST come after #include "MQTTClient.h" (line 14) — clean #undef + new

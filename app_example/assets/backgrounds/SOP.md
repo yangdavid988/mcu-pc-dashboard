@@ -2,7 +2,7 @@
 
 ## Overview
 
-Convert a 128×128 PNG to an LVGL 9.3 C array for use as a dashboard background.
+Convert a PNG to an LVGL 9.3 C array for use as a dashboard background.
 
 Two output formats are supported:
 
@@ -21,7 +21,7 @@ The script (`convert_to_lvgl.py`) detects the PNG's mode automatically:
 
 ### 1. Prepare your image
 
-- Size: **128 × 128** pixels
+- Size: **128 × 128** pixels for generated tiled backgrounds; the centered silicon watermark is **200 × 200** pixels
 - Format: **PNG**
 - No alpha (solid fill): save as RGB PNG
 - With alpha (cut-out): save as RGBA PNG, transparent areas will be truly invisible
@@ -31,7 +31,7 @@ The script (`convert_to_lvgl.py`) detects the PNG's mode automatically:
 Put your file in this directory:
 
 ```
-pc_dashboard_demo/app_example/img_bg/your_image.png
+pc_dashboard_demo/app_example/assets/backgrounds/your_image.png
 ```
 
 ### 3. Register in FILE_MAP
@@ -40,9 +40,9 @@ Open `convert_to_lvgl.py` and add a line to `FILE_MAP`:
 
 ```python
 FILE_MAP = {
-    "bg_cobalt_intel_128.png":      ("bg_cobalt",   "bg_cobalt_bitmap"),
-    "bg_inferno_amd_128.png":       ("bg_inferno",  "bg_inferno_bitmap"),
-    "bg_silicon_apple_128.png":     ("bg_silicon",  "bg_silicon_bitmap"),
+    "bg_cobalt_128.png":             ("bg_cobalt",   "bg_cobalt_bitmap"),
+    "bg_inferno_128.png":            ("bg_inferno",  "bg_inferno_bitmap"),
+    "mcu.png":                       ("bg_silicon", "bg_silicon_bitmap"),
     "your_image.png":               ("your_struct", "your_bitmap"),   # <-- add here
 }
 ```
@@ -70,7 +70,7 @@ extern const lv_image_dsc_t your_struct;
 Open `app_example/CMakeLists.txt` and add to the source list:
 
 ```cmake
-img_bg/your_struct.c
+assets/backgrounds/your_struct.c
 ```
 
 ### 7. Use in theme.c
@@ -91,10 +91,10 @@ Then adjust the display style in `theme_watermark_update()`:
 if (g_theme_id == THEME_SILICON)
 {
     /* centred, non-tiled */
-    lv_obj_set_size(g_bg_watermark, 128, 128);
+    lv_obj_set_size(g_bg_watermark, 200, 200);
     lv_obj_set_pos(g_bg_watermark,
-                   (SCREEN_WIDTH - 128) / 2,
-                   (SCREEN_HEIGHT - 128) / 2);
+                   (SCREEN_WIDTH - 200) / 2,
+                   (SCREEN_HEIGHT - 200) / 2);
     lv_obj_set_style_bg_image_tiled(g_bg_watermark, false, 0);
 }
 else
@@ -111,7 +111,9 @@ else
 ## Tips
 
 - **Cut-out (alpha) images** use RGB565A8 = 48 KB each. This is fine for one or two extras, but don't add too many on a 512 KB SRAM MCU.
-- **Solid images** use RGB565 = 32 KB each. The three defaults (cobalt/inferno/silicon) all use this format.
+- **Solid images** use RGB565 = 32 KB each. The cobalt and inferno defaults use this format.
+- The centered silicon watermark uses RGB565A8 because it contains an alpha channel.
+- The `generate_bg.py` helper regenerates the cobalt and inferno tiled patterns; `mcu.png` is maintained as the silicon watermark source.
 - The watermark container uses `LV_OPA_10` (10 % opacity). With alpha images, transparent areas will be fully invisible, only the subject shows faintly.
 
 ## Quick reference
@@ -125,7 +127,7 @@ All four files to edit:
 
 | File                                      | What to add               |
 |-------------------------------------------|---------------------------|
-| `img_bg/convert_to_lvgl.py`               | FILE_MAP entry            |
-| `img_bg/bg.h`                             | `extern const` declaration |
+| `assets/backgrounds/convert_to_lvgl.py`   | FILE_MAP entry            |
+| `assets/backgrounds/bg.h`                 | `extern const` declaration |
 | `app_example/CMakeLists.txt`              | source file               |
 | `app_example/pc_dashboard_theme.c`        | `bg_image = &xxx,`        |

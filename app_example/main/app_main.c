@@ -4,6 +4,7 @@
 #include "config/threshold_config.h"
 #include "hal/gpio_control.h"
 #include "core/wifi_reconnect.h"
+#include "core/usb_cdc_receiver.h"
 /* PPE hardware-accelerated draw unit (SDK AmebaGreen2 AG2 driver) */
 // #include "lv_draw_ppe.h"
 #include "ameba_pmu.h"         /* pmu_acquire_wakelock */
@@ -174,7 +175,17 @@ void app_example(void)
         return;
     }
 
-    /* Create wifi connection task (low priority, exits after connecting) */
+#ifdef CONFIG_USB_CDC_MODE
+    /* ===== USB CDC Mode (ST7262 only) =====
+     * All data comes from the PC via USB cable: hardware stats, weather,
+     * SHT3X (PC-forwared via MQTT), and lock events.
+     * WiFi / MQTT / HTTP weather are bypassed — no network needed on MCU. */
+    usb_cdc_receiver_start();
+    RTK_LOGI(TAG, "USB CDC mode: WiFi disabled, all data via USB\n");
+#else
+    /* ===== MQTT Mode (original) =====
+     * WiFi + MQTT for all data.  Used on DBL070 or when USB cable is
+     * unavailable.                                             */
     if (rtos_task_create(NULL,
                          "wifi_connect",
                          (rtos_task_t) wifi_connect_task,
@@ -198,6 +209,7 @@ void app_example(void)
     {
         RTK_LOGE(TAG, "Create weather fetch task failed!\r\n");
     }
+#endif /* CONFIG_USB_CDC_MODE */
 
     RTK_LOGI(TAG, "All tasks created.\r\n");
 }

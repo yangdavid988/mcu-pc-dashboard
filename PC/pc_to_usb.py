@@ -1,15 +1,22 @@
 #!/usr/bin/env python
 """
-Cross-platform PC resource monitor -> MQTT / debug output
-Supports Windows / Linux / macOS
-Auto-runs in .venv virtual environment if available
+PC resource monitor --> USB serial output
+Feature-aligned with pc_to_emqx.py (identical capabilities):
 
-Additional fields:
-  cpu_freq_current / cpu_freq_min / cpu_freq_max
-  hostname / os_platform
-  swap_total / swap_used / swap_percent
-  gpu_name / gpu_usage / gpu_mem_used / gpu_mem_total / gpu_temp
-  disk_io_percent (Linux only, Windows = null)
+  - ensure_venv(): auto-restart inside project .venv
+  - diag_log() + --log-file: diagnostic log to file
+  - LHM timing diagnostics: slow Update detection + stale-cache fallback
+  - get_disk_io_percent(): psutil read_time/write_time delta (no more wmic deadlock)
+  - GPU triple detection: nvidia-smi -> WMI COM -> wmic CLI
+  - get_weather(): OpenWeatherMap fetch, embedded in USB stats JSON
+
+Auto-detect serial port:
+  * No --port given -> scan for Ameba CDC ACM devices; retry every 2s if none found.
+  * One MCU        -> auto-connect.
+  * Multiple MCUs  -> list them and ask user to specify --port COMx.
+  * --port COMx    -> wait until that port appears, then connect.
+  * If the MCU is unplugged -> auto-reconnect when it reappears.
+  * Zero CPU waste: time.sleep() between scans.
 """
 
 import sys
@@ -20,9 +27,9 @@ import getpass
 import json
 import time
 import signal
-import ssl
 import socket
 import datetime as dt  # LHM timing diagnostics
+import threading
 
 # ---------- Virtual environment auto-switch ----------
 def ensure_venv(venv_dir=".venv"):
@@ -43,7 +50,7 @@ def ensure_venv(venv_dir=".venv"):
             print("  .venv\\Scripts\\activate")
         else:
             print("  source .venv/bin/activate")
-        print("  pip install -r requirements.txt")
+        print("  pip install pyserial psutil pythonnet")
         sys.exit(1)
 
     print(f"-> Re-running via venv: {python_exe}")
@@ -54,22 +61,102 @@ ensure_venv()
 
 # ---------- Third-party imports ----------
 import psutil
-import paho.mqtt.client as mqtt
+import serial
+import serial.tools.list_ports
 
-# ---------- Configuration ----------
-MQTT_BROKER = "your.emqxsl.cn"
-MQTT_PORT = 8883
-MQTT_TOPIC = "pc/stats"
-MQTT_TOPIC_WEATHER = "pc/weather"
-MQTT_CLIENT_ID = "pc"
-MQTT_USERNAME = "your_user_id"
-MQTT_PASSWORD = "your_password"
-PUBLISH_INTERVAL = 3          # Seconds between publishes
-TLS_VERIFY = False            # Skip cert validation during testing
+# ================== Config ==================
+# Realtek USB VID + custom CDC ACM PID for auto-detect
+# PID 0xF852 distinguishes our firmware from ROM download mode (PID 0xF851).
+AMEBA_CDC_VID = {0x0BDA, 0x1D5C}          # Realtek Semiconductor
+AMEBA_CDC_PID = 0xF852                     # Our custom CDC ACM PID
+DEFAULT_PORT = None                        # None = auto-detect; or "COM3" etc.
+BAUDRATE = 115200
+PUBLISH_INTERVAL = 1                       # seconds (was 3s; 1s matches UI_UPDATE_INTERVAL_MS)
+
+# Full LHM sensor output (USB version: enabled by default)
+LHM_FULL_DATA = True
+
+# ---------- Weather (OpenWeatherMap) ----------
+# Coordinate-based query (lat/lon) for accurate district-level weather.
+# City display name auto-detected from API response's "name" field.
+# Set WEATHER_CITY_OVERRIDE to override auto-detected name.
+# Weather is embedded in the main stats JSON sent over USB.
+# Set WEATHER_ENABLED = False when MCU has WEATHER_FETCH_MCU=1 (MCU HTTP fetches).
+_WEATHER_CACHE = None
+_WEATHER_CACHE_TIME = 0
+_WEATHER_CACHE_TTL = 600          # 10 minutes
+WEATHER_API_KEY = "YOUR_OPENWEATHERMAP_API_KEY"  # Get free key at https://openweathermap.org/api
+WEATHER_LAT = 31.34               # Latitude  (e.g., Gusu District, Suzhou)
+WEATHER_LON = 120.61              # Longitude
+WEATHER_CITY_OVERRIDE = ""        # Optional: empty = use API-returned "name"
+WEATHER_ENABLED = True           # True = enable OpenWeatherMap API fetch (requires valid WEATHER_API_KEY)
+
+# ---------- MQTT SHT3X subscriber (background thread) ----------
+# In USB CDC mode (CONFIG_USB_CDC_MODE), the MCU has no WiFi.
+# The PC subscribes to MQTT topic "humiture/measurement" on behalf of the
+# MCU and forwards the latest SHT3X reading through USB JSON so the MCU
+# can display it without a network connection.
+try:
+    import paho.mqtt.client as mqtt
+    _HAVE_SHT3X_MQTT = True
+except ImportError:
+    _HAVE_SHT3X_MQTT = False
+    print("[INFO] paho-mqtt not installed. SHT3X data will not be available via USB.")
+    print("       Install: pip install paho-mqtt")
+
+_SHT3X_CACHE = {}
+_SHT3X_LOCK = threading.Lock()
+
+# ---------- Weather send suppression (align with pc_to_emqx.py pattern) ----------
+# Track the last weather snapshot sent over USB.  Weather data changes slowly
+# (API fetch interval is 10 minutes); embedding it in every 1s frame is wasteful.
+# Only include weather fields in the stats JSON when the snapshot actually changes.
+_USB_WEATHER_SENT = None
+# =========================================
+
+def _sht3x_on_message(client, userdata, msg):
+    try:
+        data = json.loads(msg.payload.decode('utf-8'))
+        with _SHT3X_LOCK:
+            _SHT3X_CACHE.clear()
+            _SHT3X_CACHE.update(data)
+    except Exception:
+        pass
+
+def _sht3x_mqtt_loop():
+    """Connect to EMQX broker, subscribe to humiture/measurement, loop forever."""
+    if not _HAVE_SHT3X_MQTT:
+        return
+    client = mqtt.Client()
+    client.username_pw_set("your-username", "your-passwd")
+    client.tls_set()
+    client.on_message = _sht3x_on_message
+    try:
+        client.connect("your.emqxsl.cn", 8883, 60)
+        client.subscribe("humiture/measurement", qos=0)
+        print("[SHT3X-MQTT] Subscribed to humiture/measurement (background)")
+        client.loop_forever()
+    except Exception as e:
+        print(f"[SHT3X-MQTT] Connection failed: {e}")
+
+def start_sht3x_subscriber():
+    """Launch the MQTT subscriber in a daemon thread."""
+    t = threading.Thread(target=_sht3x_mqtt_loop, daemon=True)
+    t.start()
+
+def get_sht3x_data():
+    """Return a copy of the latest SHT3X reading, or None."""
+    if not _HAVE_SHT3X_MQTT:
+        return None
+    with _SHT3X_LOCK:
+        return dict(_SHT3X_CACHE) if _SHT3X_CACHE else None
+# =========================================
+
 DEBUG_MODE = "--debug" in sys.argv or "-d" in sys.argv
 
-# Verbose per-cycle logging (default OFF). Controls [PUB] byte-count prints
-# and similar high-frequency messages. Set to True only when debugging.
+# Verbose per-cycle logging (default OFF). Controls [SENT] byte-count prints
+# and similar high-frequency messages that add little value at 1s intervals.
+# Set to True only when debugging data transmission volume.
 VERBOSE_LOG = False
 
 # ---------- Diagnostic log file (optional, --log-file <path>) ----------
@@ -91,18 +178,12 @@ def diag_log(msg):
         except Exception:
             pass
 
-# Full LHM sensor output (default off)
-# True  -> Push complete LHM sensor data (~100+ fields), for debugging or USB full report
-# False -> Only backfill fields that nvidia-smi/WMI couldn't provide; lhm fields excluded
-LHM_FULL_DATA = False
 
 # ---------- Libre Hardware Monitor path (Windows only) ----------
-# Auto-detect from running LHM process, fall back to default path
-LHM_DIR = None  # Resolved by _find_lhm_dir() at runtime
+LHM_DIR = None
 
 def _find_lhm_dir():
     """Dynamically locate Libre Hardware Monitor installation directory."""
-    # Try from running LHM process
     try:
         proc = subprocess.run(
             ["wmic", "process", "where", "name='LibreHardwareMonitor.exe",
@@ -118,17 +199,14 @@ def _find_lhm_dir():
     except Exception:
         pass
 
-    # Default path (user Downloads directory)
     default = os.path.expandvars(r"%USERPROFILE%\Downloads\LibreHardwareMonitor")
-    dll_path = os.path.join(default, "LibreHardwareMonitorLib.dll")
-    if os.path.isfile(dll_path):
+    if os.path.isfile(os.path.join(default, "LibreHardwareMonitorLib.dll")):
         return default
 
     return None
 
 running = True
 
-# Signal handler: only set flag, never call print() (may deadlock)
 def set_exit_flag(sig, frame):
     global running
     running = False
@@ -136,6 +214,7 @@ def set_exit_flag(sig, frame):
 signal.signal(signal.SIGINT, set_exit_flag)
 if hasattr(signal, 'SIGTERM'):
     signal.signal(signal.SIGTERM, set_exit_flag)
+
 
 # ---------- Lock screen detection (cross-platform) ----------
 class ScreenLockDetector:
@@ -152,7 +231,7 @@ class ScreenLockDetector:
         return False
 
     def _check_windows(self):
-        """Check for LogonUI.exe process (Windows lock screen)."""
+        """Check for LogonUI.exe process."""
         for proc in psutil.process_iter(['name']):
             try:
                 if proc.info['name'] == 'LogonUI.exe':
@@ -216,7 +295,7 @@ def get_network_rate():
     return round(upload, 1), round(download, 1)
 
 # ---------- CPU temperature (cross-platform) ----------
-# Linux: psutil native sensors
+# Linux: psutil native sensors_temperatures()
 # Windows: LHM DLL provides more accurate CPU Package temperature
 def get_cpu_temp():
     if hasattr(psutil, "sensors_temperatures"):
@@ -230,11 +309,11 @@ def get_cpu_temp():
     return None
 
 
-# ---------- Libre Hardware Monitor comprehensive collection (pythonnet DLL) ----------
+# ---------- Libre Hardware Monitor via pythonnet DLL ----------
 _LHM_data_cache = None
 _LHM_cache_time = 0
 _LHM_CACHE_TTL = 30
-_LHM_computer = None  # Persistent Computer object, Open() once, avoid repeated HW enumeration
+_LHM_computer = None  # Persistent Computer object: Open() once, avoid repeated HW enumeration
 
 
 def get_libre_hardware_monitor_data():
@@ -243,22 +322,8 @@ def get_libre_hardware_monitor_data():
     No LHM process, WMI registration, or HTTP Server required.
 
     Computer object is Open()ed once and kept resident; subsequent calls only
-    Update() to refresh values, avoiding full HW re-enumeration (which triggers
-    Windows device manager refresh).
-
-    Returns a grouped dictionary, or None (unavailable):
-
-      temps:    Temperature (C)
-        CPU Package, P-Core #1~4, E-Core #1~8, GPU Core, Hard drives...
-      loads:    Load (%)
-        CPU Total, CPU Core #x Thread #x, GPU D3D 3D/Video/Decode...
-      clocks:   Frequency (MHz)
-        P-Core #1~4, E-Core #1~8, Bus Speed, GPU Core...
-      fans:     Fan speed (RPM)
-      voltages: Voltage (V)
-        CPU Core, P-Core #x, E-Core #x, GPU Core...
-      powers:   Power consumption (W)
-        CPU Package, CPU Cores, CPU Platform, GPU Power...
+    call Update() to refresh values, avoiding full HW re-enumeration (which
+    triggers Windows device manager refresh).
 
     Result cached for _LHM_CACHE_TTL seconds.
     """
@@ -407,26 +472,20 @@ def get_libre_hardware_monitor_data():
     except Exception as e:
         _lhm_fail_elapsed = time.time() - _lhm_update_start
         print(f"[LHM] Update exception ({_lhm_fail_elapsed:.1f}s): {e}")
-        # Cache expired but update failed: keep stale cache, retry next cycle
+        # Cache expired but update failed: keep stale cache, retry on next cycle
         _LHM_cache_time = now
         return _LHM_data_cache  # Return stale cache as fallback
 
 
 # ---------- GPU backfill: fill unavailable fields from LHM data ----------
 def _backfill_gpu_from_lhm(gpu, lhm):
-    """
-    Use LHM DLL sensor data to backfill GPU fields that nvidia-smi couldn't provide.
-    Applicable for Intel/AMD integrated GPU scenarios.
-    """
     if gpu is None or lhm is None:
         return gpu
 
     gpu_name = gpu.get("name") or ""
     changed = False
 
-    # Only backfill non-NVIDIA GPUs (NVIDIA has complete data from nvidia-smi)
     if "NVIDIA" not in gpu_name.upper():
-        # --- GPU usage: from D3D 3D Load ---
         if gpu.get("usage") is None and lhm["loads"]:
             for key, val in lhm["loads"].items():
                 if "D3D 3D" in key:
@@ -434,7 +493,6 @@ def _backfill_gpu_from_lhm(gpu, lhm):
                     changed = True
                     break
 
-        # --- GPU memory used: from D3D Shared Memory Used ---
         if gpu.get("mem_used_mb") is None and lhm["others"]:
             for key, val in lhm["others"].items():
                 if "D3D Shared Memory Used" in key:
@@ -442,11 +500,9 @@ def _backfill_gpu_from_lhm(gpu, lhm):
                     changed = True
                     break
 
-        # --- GPU temperature: from LHM temperature data ---
         if gpu.get("temp_c") is None and lhm["temps"]:
             for key, val in lhm["temps"].items():
-                key_lower = key.lower()
-                if "gpu" in key_lower:
+                if "gpu" in key.lower():
                     gpu["temp_c"] = val
                     changed = True
                     break
@@ -458,10 +514,9 @@ def _backfill_gpu_from_lhm(gpu, lhm):
 
 
 # ---------- GPU info collection (cross-platform, cached) ----------
-_gpu_info_cache = None          # None=unqueried, dict=cached (GPU info never changes at runtime)
+_gpu_info_cache = None
 
 def get_gpu_info():
-    """Fetch GPU info, cached for the entire process lifetime (GPU hardware is immutable)."""
     global _gpu_info_cache
     if _gpu_info_cache is not None:
         return _gpu_info_cache
@@ -507,7 +562,7 @@ def get_gpu_info():
     except Exception:
         pass
 
-    # Strategy 2: Windows WMI (Intel / AMD integrated GPU)
+    # Strategy 2: Windows WMI (Intel/AMD integrated GPU)
     if result is None and platform.system() == 'Windows':
         try:
             import wmi
@@ -518,7 +573,7 @@ def get_gpu_info():
                 name = str(gpu.Name) if gpu.Name else None
                 total_mb = None
                 if hasattr(gpu, 'AdapterRAM') and gpu.AdapterRAM:
-                    total_mb = round(float(gpu.AdapterRAM) / (1048576), 0)
+                    total_mb = round(float(gpu.AdapterRAM) / 1048576, 0)
                 if name:
                     result = {
                         "name": name,
@@ -559,17 +614,15 @@ def get_gpu_info():
         except Exception as e:
             print(f"[GPU-DBG] wmic failed: {e}")
 
-    # Cache result (even None, to avoid retrying every cycle)
     _gpu_info_cache = result
     return result
 
-# ---------- Disk I/O utilization ----------
-# Calculated from psutil.disk_io_counters() read_time/write_time deltas,
-# avoiding wmic WMI performance counter provider deadlock (which can hang 10+ s).
+# ---------- Disk I/O utilization (psutil delta, no wmic deadlock) ----------
 _disk_io_cache = None
 _disk_io_prev_time = 0.0
 _disk_io_prev_read_ms = 0
 _disk_io_prev_write_ms = 0
+
 
 def get_disk_io_percent():
     """
@@ -610,79 +663,34 @@ def get_disk_io_percent():
     _disk_io_prev_read_ms = read_ms
     _disk_io_prev_write_ms = write_ms
 
-    # Read and write may overlap; take max as conservative busy time estimate
+    # Read and write may overlap; take max as conservative busy-time estimate
     delta_busy = max(delta_read, delta_write)
     percent = min(100.0, round(delta_busy / delta_wall_ms * 100.0, 1))
     _disk_io_cache = percent
     return percent
 
+
 # ---------- Root partition usage (cross-platform) ----------
 def get_disk_usage_percent():
     try:
         if platform.system() == 'Windows':
-            system_drive = os.environ.get('SystemDrive', 'C:')
-            path = system_drive + '\\'
-        else:
-            path = '/'
-        return psutil.disk_usage(path).percent
+            return psutil.disk_usage(os.environ.get('SystemDrive', 'C:') + '\\').percent
+        return psutil.disk_usage('/').percent
     except Exception:
         return psutil.disk_usage('/').percent
 
-# ---------- Current user (multi-level fallback) ----------
-def get_current_user():
-    try:
-        users = psutil.users()
-        if users:
-            return users[0].name
-    except Exception:
-        pass
 
-    for var in ('USER', 'LOGNAME', 'USERNAME'):
-        user = os.environ.get(var)
-        if user:
-            return user
-
-    try:
-        return os.getlogin()
-    except Exception:
-        pass
-
-    try:
-        return getpass.getuser()
-    except Exception:
-        pass
-
-    return "unknown"
-
-# ---------- Weather (OpenWeatherMap, cached 10 min) ----------
-# Coordinate-based query (lat/lon) for accurate district-level weather.
-# City display name is auto-detected from API response's "name" field.
-# Set WEATHER_CITY_OVERRIDE to override auto-detected name (e.g., "Gusu District").
-_WEATHER_CACHE = None
-_WEATHER_CACHE_TIME = 0
-_WEATHER_CACHE_TTL = 600          # 10 minutes
-# Last published weather snapshot — used to suppress duplicate sends.
-# Weather is now published to a separate topic (pc/weather) with retain=True,
-# so newly-connected MCU subscribers receive it immediately via broker's
-# retained message delivery, without needing periodic force-refresh.
-_WEATHER_LAST_PUBLISHED = None
-WEATHER_API_KEY = "YOUR_OPENWEATHERMAP_API_KEY"  # Get free key at https://openweathermap.org/api
-WEATHER_LAT = 31.34               # Latitude  (e.g., Gusu District, Suzhou)
-WEATHER_LON = 120.61              # Longitude
-WEATHER_CITY_OVERRIDE = ""        # Optional: empty = use API-returned "name"
-WEATHER_ENABLED = False           # True = enable OpenWeatherMap API fetch (requires valid WEATHER_API_KEY)
-
+# ---------- Weather (OpenWeatherMap API, 10-min cache) ----------
 def get_weather():
     """
     Fetch current weather from OpenWeatherMap API via coordinate query (lat/lon).
     Cached for _WEATHER_CACHE_TTL seconds (600s = 10 min).
-    City name is auto-detected from API response; override via WEATHER_CITY_OVERRIDE.
+    City name auto-detected from API response; override via WEATHER_CITY_OVERRIDE.
     Returns a dict or None on failure.
     """
     global _WEATHER_CACHE, _WEATHER_CACHE_TIME
     now = time.time()
 
-    # Return cached data if still fresh
     if _WEATHER_CACHE is not None and (now - _WEATHER_CACHE_TIME) < _WEATHER_CACHE_TTL:
         return _WEATHER_CACHE
 
@@ -690,7 +698,7 @@ def get_weather():
         return None
 
     try:
-        import json
+        import json as _json
         import urllib.request
         url = (
             f"https://api.openweathermap.org/data/2.5/weather"
@@ -698,9 +706,8 @@ def get_weather():
             f"&appid={WEATHER_API_KEY}&units=metric"
         )
         resp = urllib.request.urlopen(url, timeout=10)
-        data = json.loads(resp.read().decode('utf-8'))
+        data = _json.loads(resp.read().decode('utf-8'))
 
-        # Auto-detect city name from API; override if configured
         city_name = data["name"]
         if WEATHER_CITY_OVERRIDE:
             city_name = WEATHER_CITY_OVERRIDE
@@ -726,49 +733,33 @@ def get_weather():
         return _WEATHER_CACHE
 
 
-def publish_weather_if_changed(client, weather):
-    """
-    Publish weather to separate topic MQTT_TOPIC_WEATHER with retain=True
-    if the data has changed since the last publish.
-
-    With retain=True, any MCU that subscribes to pc/weather receives the
-    latest weather immediately, regardless of when it subscribed relative
-    to the publish cycle. This eliminates the need for periodic force-
-    refresh or embedding weather in pc/stats.
-
-    Returns the published snapshot dict, or None if skipped (unchanged).
-    """
-    global _WEATHER_LAST_PUBLISHED
-
-    if weather is None:
-        return None
-
-    snapshot = {
-        "weather_temp_c": weather["temp_c"],
-        "weather_humidity": weather["humidity"],
-        "weather_wind_speed": weather["wind_speed"],
-        "weather_condition_code": weather["condition_code"],
-        "weather_main":           weather["main"],
-        "weather_description":    weather["description"],
-        "weather_city":           weather["city"],
-    }
-
-    if snapshot == _WEATHER_LAST_PUBLISHED:
-        return None  # Unchanged, skip publish
-
-    _WEATHER_LAST_PUBLISHED = snapshot
-    payload = json.dumps(snapshot, ensure_ascii=False)
-    client.publish(MQTT_TOPIC_WEATHER, payload, qos=1, retain=True)
-    print(f"[WEATHER] Published to {MQTT_TOPIC_WEATHER}: "
-          f"{snapshot['weather_city']}, {snapshot['weather_description']}, "
-          f"{snapshot['weather_temp_c']}°C")
-    return snapshot
+# ---------- Current user (multi-level fallback) ----------
+def get_current_user():
+    try:
+        users = psutil.users()
+        if users:
+            return users[0].name
+    except Exception:
+        pass
+    for var in ('USER', 'LOGNAME', 'USERNAME'):
+        user = os.environ.get(var)
+        if user:
+            return user
+    try:
+        return os.getlogin()
+    except Exception:
+        pass
+    try:
+        return getpass.getuser()
+    except Exception:
+        pass
+    return "unknown"
 
 
-# ---------- Collect all system stats ----------
+# ---------- System stats collection ----------
 _STATS_DIAG_LAST_LOG = 0.0
 def get_system_stats():
-    global _STATS_DIAG_LAST_LOG
+    global _STATS_DIAG_LAST_LOG, _USB_WEATHER_SENT
     _t0 = time.time()
     cpu = psutil.cpu_percent(interval=0)
     mem = psutil.virtual_memory()
@@ -794,27 +785,27 @@ def get_system_stats():
     disk_read_bytes = disk_io.read_bytes if disk_io else 0
     disk_write_bytes = disk_io.write_bytes if disk_io else 0
 
-    # ---------- CPU frequency ----------
+    # CPU frequency
     cpu_freq = psutil.cpu_freq()
     cpu_freq_current = round(cpu_freq.current, 0) if cpu_freq else None
     cpu_freq_min = round(cpu_freq.min, 0) if cpu_freq and cpu_freq.min > 0 else None
     cpu_freq_max = round(cpu_freq.max, 0) if cpu_freq and cpu_freq.max > 0 else None
 
-    # ---------- Hostname / OS ----------
+    # Hostname / OS
     hostname = socket.gethostname()
     os_platform = platform.platform()
 
-    # ---------- Swap ----------
+    # Swap
     swap = psutil.swap_memory()
     swap_total = swap.total if swap else 0
     swap_used = swap.used if swap else 0
     swap_percent = round(swap.percent, 1) if swap else 0.0
 
-    # ---------- GPU ----------
+    # GPU
     gpu = get_gpu_info()
     disk_io_percent = get_disk_io_percent()
 
-    # ---------- Libre Hardware Monitor sensors (backfill + full output) ----------
+    # LHM sensors
     lhm = get_libre_hardware_monitor_data()
 
     # CPU temperature: match LHM sensor name by priority
@@ -832,8 +823,21 @@ def get_system_stats():
 
     gpu = _backfill_gpu_from_lhm(gpu, lhm)
 
-    # ---------- Weather (cached, 10 min update) ----------
+    # Weather (OpenWeatherMap, 10-min cache) -- only embed in USB JSON when changed,
+    # aligning with pc_to_emqx.py's publish_weather_if_changed() pattern.
     weather = get_weather()
+    if WEATHER_ENABLED and weather is not None:
+        _weather_snap = {
+            "weather_temp_c":         weather["temp_c"],
+            "weather_humidity":       weather["humidity"],
+            "weather_wind_speed":     weather["wind_speed"],
+            "weather_condition_code": weather["condition_code"],
+            "weather_main":           weather["main"],
+            "weather_description":    weather["description"],
+            "weather_city":           weather["city"],
+        }
+    else:
+        _weather_snap = None
 
     _elapsed = time.time() - _t0
     if _elapsed > 3.0:
@@ -843,8 +847,7 @@ def get_system_stats():
         diag_log(f"[DIAG] get_system_stats() took {_elapsed:.1f}s")
         _STATS_DIAG_LAST_LOG = time.time()
 
-    return {
-        # Legacy fields (backward compatible)
+    stats = {
         "cpu": cpu,
         "mem": mem_percent,
         "mem_total": mem_total_bytes,
@@ -864,7 +867,6 @@ def get_system_stats():
         "disk_write_bytes": disk_write_bytes,
         "timestamp": int(time.time()),
 
-        # Additional fields
         "cpu_freq_current": cpu_freq_current,
         "cpu_freq_min": cpu_freq_min,
         "cpu_freq_max": cpu_freq_max,
@@ -880,13 +882,31 @@ def get_system_stats():
         "gpu_temp_c": gpu["temp_c"] if gpu else None,
         "disk_io_percent": disk_io_percent,
 
-        # Libre Hardware Monitor full sensor data (only when LHM_FULL_DATA=True)
+        # Weather fields ¡ª only include when the snapshot changed, matching
+        # pc_to_emqx.py's publish_weather_if_changed() pattern.
+        **(_weather_snap if (_weather_snap is not None
+                             and _weather_snap != _USB_WEATHER_SENT) else {}),
+
         **({"lhm": lhm} if LHM_FULL_DATA else {}),
     }
 
+    # Update weather sentinel when weather data was emitted
+    if _weather_snap is not None and _weather_snap != _USB_WEATHER_SENT:
+        _USB_WEATHER_SENT = _weather_snap
+
+    # SHT3X sensor data (PC forwards from MQTT humiture/measurement topic)
+    sht3x_data = get_sht3x_data()
+    if sht3x_data:
+        stats["sht3x_temperature"]   = sht3x_data.get("temperature_C")
+        stats["sht3x_temperature_f"] = sht3x_data.get("temperature_F")
+        stats["sht3x_humidity"]      = sht3x_data.get("humidity")
+
+    return stats
+
+
 # ---------- Debug mode ----------
 def debug_loop():
-    print("[DEBUG] Local debug mode, no MQTT connection. Press Ctrl+C to exit.")
+    print("[DEBUG] Local debug mode, print data only, no serial output.")
     while running:
         stats = get_system_stats()
         print(json.dumps(stats, indent=2, ensure_ascii=False))
@@ -897,174 +917,259 @@ def debug_loop():
                     break
                 time.sleep(1)
 
-# ---------- MQTT mode ----------
-def on_connect(client, userdata, flags, reason_code, properties):
-    if reason_code == 0:
-        print("[MQTT] Connected successfully")
-        # Publish current lock state on (re)connect so MCU gets retained state
-        try:
-            currently_locked = userdata.is_locked()
-            event = {"event": "lock" if currently_locked else "unlock"}
-            payload = json.dumps(event, ensure_ascii=False)
-            client.publish("pc/event", payload, qos=2, retain=True)
-            print(f"[EVENT] Published initial state on connect: {'LOCK' if currently_locked else 'UNLOCK'}")
-        except Exception as e:
-            print(f"[WARN] Failed to publish initial state: {e}")
 
-        # Publish current weather on (re)connect — retained message ensures
-        # MCU subscribers receive it immediately regardless of subscribe timing.
-        try:
-            weather = get_weather()
-            if weather is not None:
-                snapshot = {
-                    "weather_temp_c": weather["temp_c"],
-                    "weather_humidity": weather["humidity"],
-                    "weather_wind_speed": weather["wind_speed"],
-                    "weather_condition_code": weather["condition_code"],
-                    "weather_main":           weather["main"],
-                    "weather_description":    weather["description"],
-                    "weather_city":           weather["city"],
-                }
-                payload = json.dumps(snapshot, ensure_ascii=False)
-                client.publish(MQTT_TOPIC_WEATHER, payload, qos=2, retain=True)
-                print(f"[WEATHER] Published on connect: "
-                      f"{snapshot['weather_city']}, {snapshot['weather_description']}, "
-                      f"{snapshot['weather_temp_c']}°C")
-        except Exception as e:
-            print(f"[WARN] Failed to publish weather on connect: {e}")
-    else:
-        print(f"[MQTT] Connection failed, return code: {reason_code}")
+# ---------- USB serial send ----------
+def list_serial_ports():
+    ports = serial.tools.list_ports.comports()
+    if not ports:
+        print("[WARN] No serial ports found.")
+        return
+    print("Available ports:")
+    for p in ports:
+        tag = " <-- Ameba CDC" if _is_ameba_cdc_port(p) else ""
+        print(f"  {p.device} - {p.description}{tag}")
 
-def on_disconnect(client, userdata, flags, reason_code, properties):
-    if reason_code != 0:
-        print("[MQTT] Unexpected disconnect, reconnecting...")
-    else:
-        print("[MQTT] Disconnected normally")
 
-def mqtt_loop():
-    global _WEATHER_LAST_PUBLISHED
-    # Create detector early so on_connect / main loop can use it
-    detector = ScreenLockDetector()
+def _is_ameba_cdc_port(port):
+    """Return True if `port` (ListPortInfo) is our custom CDC ACM device.
 
-    client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2, client_id=MQTT_CLIENT_ID)
-    client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
-    client.user_data_set(detector)
-    client.on_connect = on_connect
-    client.on_disconnect = on_disconnect
+    Requires both VID (Realtek 0x0BDA / 0x1D5C) AND our private PID
+    (AMEBA_CDC_PID = 0xF852) to avoid matching the ROM download mode
+    port (which has the same VID but PID 0xF851).
+    """
+    if port.vid is not None and port.pid is not None:
+        if port.vid in AMEBA_CDC_VID and port.pid == AMEBA_CDC_PID:
+            return True
+    return False
 
-    if MQTT_PORT == 8883:
-        if TLS_VERIFY:
-            client.tls_set()
+
+def _find_ameba_ports():
+    """Return a list of ListPortInfo for detected Ameba CDC ACM ports."""
+    return [p for p in serial.tools.list_ports.comports() if _is_ameba_cdc_port(p)]
+
+
+def wait_for_serial(port=None, baudrate=115200, retry_interval=2):
+    """
+    Wait for and open an Ameba CDC ACM serial port.
+
+    Behaviour:
+      * If a specific ``port`` (e.g. ``"COM3"``) is given — wait until that
+        COM port appears, then open it.
+      * If ``port`` is ``None`` — auto-detect:
+          -  0 Ameba ports found → retry every ``retry_interval`` seconds.
+          -  1 found             → auto-connect, no user action needed.
+          -  ≥2 found            → list them and remind user to pass ``--port``.
+      * Loop exits when a port is successfully opened or ``running`` becomes False.
+      * Returns a ``serial.Serial`` instance, or ``None`` on cancellation.
+    """
+    last_scan_msg = 0.0
+    list_shown = False
+
+    while running:
+        if port:
+            # Specific port requested — wait for it to appear
+            available = [p for p in serial.tools.list_ports.comports()
+                         if p.device == port]
+            if available:
+                break
+            if not list_shown:
+                print(f"[WAIT] Port {port} not found. Waiting...")
+                list_serial_ports()
+                list_shown = True
         else:
-            client.tls_set(cert_reqs=ssl.CERT_NONE)
-            client.tls_insecure_set(True)
+            # Auto-detect mode
+            ameba_ports = _find_ameba_ports()
 
-    # LWT: if this script crashes or is killed, MCU sees disconnect immediately
-    client.will_set("pc/event", '{"event":"disconnect"}', qos=1, retain=True)
+            if len(ameba_ports) == 1:
+                port = ameba_ports[0].device
+                print(f"[INFO] Auto-detected Ameba CDC on {port}")
+                break
 
-    print(f"[INFO] Connecting to {MQTT_BROKER}:{MQTT_PORT} ...")
+            if len(ameba_ports) == 0 and (time.time() - last_scan_msg) > 8:
+                print("[WAIT] No Ameba CDC device detected. Plug the MCU via USB.")
+                print("       Use --list to see all serial ports, or --port COMx to specify.")
+                last_scan_msg = time.time()
+                list_shown = False
+
+            if len(ameba_ports) >= 2 and not list_shown:
+                print(f"[WARN] Found {len(ameba_ports)} Ameba CDC devices."
+                      " Use --port COMx to select one:")
+                for p in ameba_ports:
+                    print(f"       {p.device} - {p.description}")
+                list_shown = True
+
+        # Sleep (check running flag every 1 s)
+        for _ in range(retry_interval):
+            if not running:
+                return None
+            time.sleep(1)
+
+    # Open the port
     try:
-        client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
-    except Exception as e:
-        print(f"[ERROR] Cannot connect to MQTT broker: {e}")
-        sys.exit(1)
+        ser = serial.Serial(port, baudrate, timeout=1)
+        print(f"[INFO] Serial {port} opened, baudrate {baudrate}")
+        return ser
+    except PermissionError:
+        print(f"[ERROR] Permission denied on {port}.")
+        if not sys.platform.startswith("win"):
+            print("       On Linux, add your user to the 'dialout' group and re-login:")
+            print("         sudo usermod -a -G dialout $USER")
+        list_serial_ports()
+        return None
+    except serial.SerialException as e:
+        print(f"[ERROR] Cannot open serial {port}: {e}")
+        list_serial_ports()
+        return None
+
+
+def usb_loop(ser):
+    """Send stats and events over an already-open Serial object."""
+    lock_detector = ScreenLockDetector()
+    LOCK_CHECK_INTERVAL = 1.0
 
     g_stats_count = 0
     g_last_complete = time.time()
-    client.loop_start()
-    print(f"[INFO] Publishing every {PUBLISH_INTERVAL}s to {MQTT_TOPIC}")
-
-    # Lock screen check interval (seconds) -- checked every 1s
-    LOCK_CHECK_INTERVAL = 1.0
-
-    # Lock transition tracking: suppress interval anomaly detection on first publish after lock
     was_locked_before = False
+    fresh_connect = True
+
+    # Reset weather sentinel so cached weather is re-sent after reconnect
+    global _USB_WEATHER_SENT
+    _USB_WEATHER_SENT = None
 
     while running:
         try:
             cycle_start = time.time()
-            currently_locked = detector.is_locked()
+            currently_locked = lock_detector.is_locked()
 
-            # State transition -> publish event immediately
-            if detector.has_state_changed(currently_locked):
-                if not currently_locked:
-                    # Coming out of standby: reset weather snapshot so weather
-                    # fields are always re-sent on the first post-standby publish.
-                    # Handles the case where the MCU rebooted during standby.
-                    _WEATHER_LAST_PUBLISHED = None
-                else:
-                    was_locked_before = True   # Entering lock -- suppress interval warning on unlock
-                event = {"event": "lock" if currently_locked else "unlock"}
-                payload = json.dumps(event, ensure_ascii=False)
-                ret = client.publish("pc/event", payload, qos=1, retain=True)
-                print(f"[EVENT] Published {'LOCK' if currently_locked else 'UNLOCK'} event")
-                if ret.rc != mqtt.MQTT_ERR_SUCCESS:
-                    print(f"[WARN] Event publish failed: {ret.rc}")
+            # State transition -> send event via serial immediately
+            if lock_detector.has_state_changed(currently_locked):
+                event = json.dumps({"event": "lock" if currently_locked else "unlock",
+                                    "timestamp": int(time.time())},
+                                    ensure_ascii=False) + '\n'
+                ser.write(event.encode('utf-8'))
+                print(f"[EVENT] {'LOCK' if currently_locked else 'UNLOCK'} -> serial")
 
-            # Skip HW collection during lock (no log output)
-            if not currently_locked:
+            # Skip HW collection while locked (except one reconnect burst)
+            if not currently_locked or fresh_connect:
+                fresh_connect = False
                 stats = get_system_stats()
-                payload = json.dumps(stats, ensure_ascii=False)
-                ret = client.publish(MQTT_TOPIC, payload, qos=0)
-                if ret.rc == mqtt.MQTT_ERR_SUCCESS:
-                    g_stats_count += 1
-                    now = time.time()
-                    cycle_elapsed = now - cycle_start
-                    idle_since_last = now - g_last_complete
-                    if cycle_elapsed > 3.0:
-                        diag_log(f"[DIAG] Publish cycle took {cycle_elapsed:.1f}s (interval {idle_since_last:.0f}s, #{g_stats_count})")
-                    # Skip interval anomaly check for first post-lock publish (gap is expected)
-                    if not was_locked_before and idle_since_last > 6.0:
-                        diag_log(f"[DIAG] Publish interval anomaly: {idle_since_last:.0f}s (possible stall)")
-                    was_locked_before = False
-                    g_last_complete = now
-                    if VERBOSE_LOG:
-                        diag_log(f"[PUB] {len(payload)} bytes")
-                else:
-                    print(f"[WARN] Publish failed: {ret.rc}")
+                payload = json.dumps(stats, ensure_ascii=False) + '\n'
+                ser.write(payload.encode('utf-8'))
+                now = time.time()
+                cycle_elapsed = now - cycle_start
+                idle_since_last = now - g_last_complete
+                g_stats_count += 1
+                if cycle_elapsed > 3.0:
+                    diag_log(f"[DIAG] Send cycle took {cycle_elapsed:.1f}s (interval {idle_since_last:.0f}s, #{g_stats_count})")
+                if not was_locked_before and idle_since_last > 6.0:
+                    diag_log(f"[DIAG] Send interval anomaly: {idle_since_last:.0f}s (possible stall)")
+                was_locked_before = False
+                g_last_complete = now
+                if VERBOSE_LOG:
+                    print(f"[SENT] {len(payload)} bytes")
+            else:
+                if not was_locked_before:
+                    print("[LOCK] Screen locked, skip HW collection")
+                was_locked_before = True
 
-                # Publish weather to separate retained topic (pc/weather)
-                # Retained message ensures new/subsequent MCU subscribers
-                # receive weather immediately even if they subscribe late.
-                try:
-                    weather = get_weather()
-                    publish_weather_if_changed(client, weather)
-                except Exception as e:
-                    diag_log(f"[ERROR] Weather publish: {e}")
+            # Fine-grained sleep: check lock state every LOCK_CHECK_INTERVAL
+            # NOTE: inside try block so any SerialException (e.g. MCU unplugged)
+            # is caught, triggering reconnection.
+            for _ in range(int(PUBLISH_INTERVAL / LOCK_CHECK_INTERVAL)):
+                if not running:
+                    break
+                time.sleep(LOCK_CHECK_INTERVAL)
+                new_locked = lock_detector.is_locked()
+                if lock_detector.has_state_changed(new_locked):
+                    event = json.dumps({"event": "lock" if new_locked else "unlock",
+                                        "timestamp": int(time.time())},
+                                        ensure_ascii=False) + '\n'
+                    ser.write(event.encode('utf-8'))
+                    print(f"[EVENT] Fast-detect state change -> {'LOCK' if new_locked else 'UNLOCK'} -> serial")
+        except serial.SerialException as e:
+            print(f"[ERROR] Serial write exception: {e}")
+            break
         except Exception as e:
-            diag_log(f"[ERROR] Collection or publish exception: {e}")
+            print(f"[ERROR] Collection exception: {e}")
 
-        # Fine-grained sleep: check lock state every LOCK_CHECK_INTERVAL to avoid unlock delay
-        for _ in range(int(PUBLISH_INTERVAL / LOCK_CHECK_INTERVAL)):
-            if not running:
-                break
-            time.sleep(LOCK_CHECK_INTERVAL)
-            new_locked = detector.is_locked()
-            if detector.has_state_changed(new_locked):
-                if not new_locked:
-                    # Coming out of standby (fast-detect path): reset weather
-                    # snapshot so weather fields are re-sent on next publish.
-                    _WEATHER_LAST_PUBLISHED = None
-                event = {"event": "lock" if new_locked else "unlock"}
-                payload = json.dumps(event, ensure_ascii=False)
-                ret = client.publish("pc/event", payload, qos=1, retain=True)
-                print(f"[EVENT] Fast-detect state change -> {'LOCK' if new_locked else 'UNLOCK'}")
-                if ret.rc != mqtt.MQTT_ERR_SUCCESS:
-                    print(f"[WARN] Event publish failed: {ret.rc}")
+    # Send disconnect event on graceful exit so MCU detects it immediately
+    event = json.dumps({"event": "disconnect", "timestamp": int(time.time())},
+                       ensure_ascii=False) + '\n'
+    try:
+        ser.write(event.encode('utf-8'))
+    except Exception as e:
+        print(f"[WARN] Disconnect serial write failed: {e}")
 
-    # Publish disconnect event on graceful exit so MCU detects it immediately
-    event = {"event": "disconnect"}
-    ret = client.publish("pc/event", json.dumps(event, ensure_ascii=False), qos=1, retain=True)
-    if ret.rc != mqtt.MQTT_ERR_SUCCESS:
-        print(f"[WARN] Disconnect event publish failed: {ret.rc}")
+    ser.close()
+    print("[INFO] Serial closed")
 
-    client.loop_stop()
-    client.disconnect()
-    print("[INFO] Exited")
 
 # ---------- Entry point ----------
 if __name__ == "__main__":
     if DEBUG_MODE:
         debug_loop()
+        sys.exit(0)
+
+    port = DEFAULT_PORT
+    baud = BAUDRATE
+    args = sys.argv[1:]
+    if "--port" in args:
+        idx = args.index("--port")
+        if idx + 1 < len(args):
+            port = args[idx + 1]
+    elif "-p" in args:
+        idx = args.index("-p")
+        if idx + 1 < len(args):
+            port = args[idx + 1]
+
+    if "--baud" in args:
+        idx = args.index("--baud")
+        if idx + 1 < len(args):
+            baud = int(args[idx + 1])
+    elif "-b" in args:
+        idx = args.index("-b")
+        if idx + 1 < len(args):
+            baud = int(args[idx + 1])
+
+    if "--list" in args or "-l" in args:
+        list_serial_ports()
+        sys.exit(0)
+
+    # Main loop: wait for device → send data → reconnect on disconnect
+    print("[INFO] pc_to_usb.py — PC stats sender over USB CDC")
+    print(f"       Baudrate: {baud}")
+    if port:
+        print(f"       Port: {port} (specified)")
     else:
-        mqtt_loop()
+        print("       Port: auto-detect (plug Ameba USB, or use --port COMx)")
+    print("       Press Ctrl+C to exit.")
+
+    print(f"[INFO] PC data @ {PUBLISH_INTERVAL}s — MCU UI timer is 1s, data-driven update matches PC send rate")
+    print(f"       Lock events carry timestamp for MCU clock sync (no SNTP needed in USB CDC mode)")
+
+    # Start MQTT SHT3X subscriber in background (USB CDC mode: MCU has no WiFi)
+    start_sht3x_subscriber()
+
+    # Remember whether user specified a port or auto-detect mode
+    auto_detect = (port is None)
+
+    # Standby monitor: when screen is locked after disconnect, wait silently
+    # for unlock before reconnecting (Windows lock prevents CDC ACM port
+    # re-enumeration from being visible to user-space processes).
+    standby_detector = ScreenLockDetector()
+
+    while running:
+        ser = wait_for_serial(port, baud)
+        if ser is None:
+            break
+        print(f"[INFO] Starting USB send loop on {ser.port}")
+        usb_loop(ser)
+        if not running:
+            break
+        print("[INFO] USB connection lost. Reconnecting...")
+        if auto_detect:
+            port = None
+
+        # Silently wait for unlock before attempting serial reconnect
+        while running and standby_detector.is_locked():
+            time.sleep(1)

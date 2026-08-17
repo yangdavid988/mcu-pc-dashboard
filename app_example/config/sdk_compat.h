@@ -2,7 +2,12 @@
 #define _SDK_COMPAT_H_
 
 #include "ameba_rtos_version.h"
+/* lwip_netconf.h provides COMPAT_CHECK_CONNECTIVITY / COMPAT_REQUEST_IP
+   used only in MQTT / WiFi code — unavailable when WiFi Kconfig symbols
+   are disabled (USB CDC mode).                                          */
+#ifndef CONFIG_USB_CDC_MODE
 #include "lwip_netconf.h"
+#endif
 
 /* ========================================================================
  * SDK Version Compatibility Layer
