@@ -19,9 +19,13 @@
 [![Last Commit](https://badgen.net/github/last-commit/yangdavid988/mcu-pc-dashboard)](https://github.com/yangdavid988/mcu-pc-dashboard)
 [![Status](https://img.shields.io/badge/status-updating-yellow)]()
 
-🚀 基于 **Ameba RTL8721F** MCU 的 PC 硬件资源实时监控器。通过 MQTT 订阅 `pc/stats`、`humiture/measurement`、`pc/event`、`pc/weather` 主题，在 **800×480 TFT** 屏幕上实时展示 CPU、GPU、内存、磁盘、网络、天气等数据，UI 由 **LVGL 9.3** 驱动。
+🚀 基于 **Ameba RTL8721F** MCU 的 PC 硬件资源实时监控器。通过 **USB CDC ACM 虚拟串口** 或 **MQTT 主题** 接收 PC 实时状态（CPU、GPU、内存、磁盘、网络），同时获取 SHT3X 温湿度和室外天气数据。在 **800×480 TFT** 屏幕上实时展示，UI 由 **LVGL 9.3** 驱动。
 
-MCU 仅作为订阅者 — 只接收数据，不发布任何消息。
+两种数据路径，编译时选择(具体参考双架构数据流程图)：
+- **USB CDC 模式**（`CONFIG_USB_CDC_MODE`）— **仅 ST7262**。所有数据通过 USB 线缆传输（CPU/RAM/磁盘/GPU/网络/电池等 PC 状态）。**MCU 不需要 WiFi，零配置开箱即用**。
+可选：PC 通过 MQTT 转发 SHT3X 温湿度数据。
+- **MQTT 模式** — DBL070 或 ST7262。WiFi + MQTT 获取全部数据。
+---
 
 - 📄 [芯片与模块信息](https://aiot.realmcu.com/cn/home.html) | 🌿 [Gitee 镜像](https://gitee.com/yangdavid988/mcu-pc-dashboard)
 
@@ -66,7 +70,8 @@ MCU 仅作为订阅者 — 只接收数据，不发布任何消息。
 
 ### ✨ 功能特点
 
-- ✅ **MQTT 订阅** — 通过 TLS 8883 加密连接，订阅 `pc/stats`、`humiture/measurement`、`pc/event`、`pc/weather` 主题。
+- ✅ **USB CDC ACM** — ST7262 上的主数据通路。全部数据通过 USB 线缆传输（PC 状态、天气、PC 转发的 SHT3X、锁屏事件）。MCU 不需要 WiFi。
+- ✅ **MQTT 订阅（备用）** — DBL070 或无 USB 的 ST7262 使用。通过 TLS 8883 加密连接，订阅 `pc/stats`、`humiture/measurement`、`pc/event`、`pc/weather` 主题。
 - ✅ **ST7262（默认）或 DBL070（可选）TFT 仪表盘** — 800×480，基于 LVGL 9.3，双缓冲 + VBlank 页翻转（无撕裂）。
 - ✅ **CPU / 内存 / 磁盘** — 彩色进度条，支持可配置阈值闪烁告警。
 - ✅ **GPU 监控** — 使用率、显存、温度及 GPU 型号名称。
@@ -89,6 +94,61 @@ MCU 仅作为订阅者 — 只接收数据，不发布任何消息。
 - ✅ **可配置阈值闪烁系统** — 当指标超过告警级别时，卡片边框和进度条闪烁提醒。阈值通过 `threshold_config.h` 配置。
 
 ---
+### 📡 双模式架构：USB CDC vs. MQTT
+
+| 对比项 | MQTT 模式 | USB CDC 模式 |
+|--------|-----------|--------------|
+| **MCU 连接方式** | 需要 WiFi | **不需要** — 仅 USB 线缆 |
+| **线缆** | 供电 USB + WiFi（无线） | **一根 USB：供电 + 数据** |
+| **部署配置** | SSID、密码、Broker TLS、证书 | **零配置** — 自动识别串口 |
+| **功耗** | 较高（WiFi 射频开启） | **更低**（WiFi 关闭） |
+| **固件体积** | 较大（大约 20–35 KB） | **更小**（WiFi/MQTT 排除） |
+| **数据采集** | MCU 与 PC 共同分担 | **全部在 PC 端**（psutil/天气/MQTT 中继） |
+| **适用屏幕** | ST7262 + DBL070 | **仅 ST7262**（有 USB 引脚） |
+
+**USB CDC 模式数据流：**
+
+```mermaid
+flowchart LR
+    subgraph PC_USB["💻 PC 端"]
+        HW_USB["pc_to_usb.py\npsutil → 硬件状态\nOpenWeatherMap → 天气\nMQTT → SHT3X\n锁屏 → lock/unlock"]
+    end
+
+    subgraph MCU_USB["⚙ Ameba RTL8721F"]
+        USB_RX["USB CDC ACM 接收\n零配置 · 无 WiFi\n仅 ST7262"]
+        JSON_USB["JSON 解析\n→ g_pc_stats"]
+        UI_USB["📊 LVGL 仪表盘\n3 布局 · 3 主题\n待机 · 背光 · 告警"]
+    end
+
+    HW_USB -->|一根 USB 线\n供电 + 数据| USB_RX
+    USB_RX --> JSON_USB
+    JSON_USB --> UI_USB
+```
+
+**MQTT 模式数据流：**
+
+```mermaid
+flowchart LR
+    subgraph PC_MQTT["💻 PC 端"]
+        HW_MQTT["pc_to_emqx.py\npsutil → 硬件状态\nOpenWeatherMap → 天气\n锁屏 → lock/unlock"]
+    end
+
+    subgraph Broker["☁ MQTT Broker · TLS 8883"]
+        TOPICS["pc/stats\npc/event\nhumiture/measurement\npc/weather"]
+    end
+
+    subgraph MCU_MQTT["⚙ Ameba RTL8721F"]
+        MQTT_RX["WiFi + MQTT 客户端\nTLS · 需 Broker\nST7262 / DBL070"]
+        JSON_MQTT["JSON 解析\n→ g_pc_stats"]
+        UI_MQTT["📊 LVGL 仪表盘\n3 布局 · 3 主题\n待机 · 背光 · 告警"]
+    end
+
+    HW_MQTT -->|MQTT 发布| TOPICS
+    TOPICS -->|MQTT 订阅| MQTT_RX
+    MQTT_RX --> JSON_MQTT
+    JSON_MQTT --> UI_MQTT
+```
+
 ### 🏗️ 项目结构
 
 ```
@@ -100,6 +160,7 @@ MCU 仅作为订阅者 — 只接收数据，不发布任何消息。
 │   ├── core/                   # 核心业务逻辑
 │   │   ├── pc_dashboard.c/h    # MQTT 客户端、JSON 解析、PC_Stats_t 数据结构
 │   │   ├── standby_manager.c/h # 待机管理器（锁屏/解锁协调）
+│   │   ├── usb_cdc_receiver.c/h# USB CDC ACM 接收器（通过 USB 线缆获取 PC 数据）
 │   │   ├── weather.c/h         # 天气数据（HTTP 获取或 MQTT 推送）
 │   │   └── wifi_reconnect.c/h  # Wi-Fi 自动连接
 │   ├── ui/                     # UI 呈现层
@@ -108,11 +169,12 @@ MCU 仅作为订阅者 — 只接收数据，不发布任何消息。
 │   │   ├── pc_dashboard_theme.c/h  # 颜色主题（COBALT/INFERNO/SILICON）
 │   │   └── pc_dashboard_lock_screen.c/h  # 鎖定畫面
 │   ├── hal/                    # 硬件抽象層
-│   │   ├── lcd/                # LCD 驱动（ST7262、DBL070、LCDC 核心）
 │   │   ├── backlight_ctrl.c/h  # PWM 背光控制
-│   │   └── gpio_control.c/h    # GPIO 按键中断 → 延迟切换
+│   │   ├── gpio_control.c/h    # GPIO 按键中断 → 延迟切换
+│   │   ├── lcd/                # LCD 驱动（ST7262、DBL070、LCDC 核心）
+│   │   └── usb/                # USB CDC ACM 自定义描述符（PID 覆盖）
 │   ├── config/                 # 配置头文件
-│   │   ├── threshold_config.h  # 告警闪烁阈值
+│   │   ├── threshold_config.h  # 统一配置：告警阈值/超时/背光/重试
 │   │   ├── lv_conf_project.h   # LVGL 配置覆盖
 │   │   ├── sdk_compat.h        # SDK 版本兼容层
 │   │   └── suppress_mqtt_log.h # MQTT 日志抑制
@@ -130,39 +192,14 @@ MCU 仅作为订阅者 — 只接收数据，不发布任何消息。
 ```
 ---
 
-### 🧠 工作原理概述
-
-1. 系统启动后，初始化 ST7262 LCD、LVGL 9.3 界面和 Wi-Fi 连接。
-2. Wi-Fi 连接成功后，MQTT 客户端订阅 `pc/stats`、`humiture/measurement`、`pc/event` 和 `pc/weather` 主题。
-3. 数据源：
-   - **PC 状态** — Python 脚本通过 `psutil` 采集硬件信息，发布到 `pc/stats`。
-   - **SHT3X 传感器** — 另一块 Ameba MCU 读取温湿度数据，发布到 `humiture/measurement`。
-   - **PC 事件** — PC 锁屏/解锁事件发布到 `pc/event`，触发 MCU 进入/退出待机模式。
-   - **室外天气** — MCU 每 10 分钟通过 HTTP 直接获取 OpenWeatherMap 数据（或 PC 端经 MQTT 推送）。
-4. 仪表盘 MCU 按主题路由收到的 JSON 数据，解析后实时更新 LVGL 显示。
-5. GPIO 按键切换布局、主题和背光亮度。
-
-```text
-Windows PC (psutil) ──MQTT──►  pc/stats              ┌──────────────────────────┐
-                                                     │  Ameba RTL8721F         │
-Windows PC ──────────MQTT──►  pc/event               │  • 订阅 pc/stats         │
-                               MQTT Broker (TLS 8883) │  • 订阅 humiture/..      │
-SHT3X MCU ──────────MQTT──►  humiture/measurement    │  • 订阅 pc/event/weather │
-                                                     │  • HTTP 获取天气          │
-                                                     │  • 3 种布局 / 3 种主题   │
-                                                     │  • 待机时钟 + 背光控制   │
-                                                     │  • ST7262 800×480 TFT    │
-                                                     └──────────────────────────┘
-```
-
----
-
 ### 🔧 搭建硬件环境
 
 1️⃣ **所需组件**
 
-- RTL8721F EVB（含 Wi-Fi 天线 + ST7262 RGB LCD 模块）
-- MQTT Broker（支持 TLS 8883 端口，例如 EMQX Cloud）
+- RTL8721F EVB（含 ST7262 RGB LCD 模块）
+  - USB CDC 模式：无需 Wi-Fi 天线
+  - MQTT 模式：需要 Wi-Fi 天线
+- MQTT Broker（支持 TLS 8883 端口，例如 EMQX Cloud）— **仅 MQTT 模式需要**，USB CDC 模式下不需要
 - Windows PC（Python 3.7+，用于运行数据采集器）
 - 另一块带 SHT3X 传感器的 Ameba MCU（可选，用于温湿度数据）
 
@@ -170,14 +207,14 @@ SHT3X MCU ──────────MQTT──►  humiture/measurement    �
 
 项目支持两种 LCD 模块：
 
-| 模块 | 分辨率 | 接口 | 驱动文件 | 启用方式 |
-|------|--------|------|----------|----------|
-| **ST7262**（默认） | 800×480 | RGB-565 并行 | `app_example/hal/lcd/st7262_cfg.c` | 默认，无需操作 |
-| **DBL070** | 800×480 | RGB-565 并行 | `app_example/hal/lcd/dbl070_cfg.c` | 取消注释 `app_example/CMakeLists.txt` 中的 `add_definitions(-DUSE_DBL070)` |
+| 模块 | 分辨率 | 接口 | 驱动文件 | 启用方式 | USB CDC |
+|------|--------|------|----------|----------|---------|
+| **ST7262**（默认） | 800×480 | RGB-565 并行 | `app_example/hal/lcd/st7262_cfg.c` | 默认，无需操作 | ✅ 支持 |
+| **DBL070** | 800×480 | RGB-565 并行 | `app_example/hal/lcd/dbl070_cfg.c` | 在 prj.conf 中设置 `CONFIG_SCREEN_DBL070=y`，或通过 `ameba.py menuconfig` 选择 | ❌ 无 USB 引脚 |
 
 引脚配置见 `app_example/hal/lcd/st7262_cfg.c` 和 `dbl070_cfg.c`。
 
-> ⚠️ `-DUSE_DBL070` 宏会调整帧缓冲区基地址和 LCDC 时序参数以适配 DBL070 模块。两个驱动都会被编译，宏决定运行时激活哪一个。
+> ⚠️ `CONFIG_SCREEN_DBL070` 宏（通过 Kconfig 设置）会调整帧缓冲区基地址和 LCDC 时序参数以适配 DBL070 模块。两个驱动都会被编译，宏决定运行时激活哪一个。
 
 3️⃣ **GPIO 按键映射**
 
@@ -193,6 +230,29 @@ SHT3X MCU ──────────MQTT──►  humiture/measurement    �
 ---
 
 ### 🚀 快速开始
+
+#### 🔌 USB CDC 零配置（开箱即用）
+
+> 不需要 WiFi、MQTT Broker、传感器硬件或任何 API Key。插上 USB 即可显示 PC 监控面板。
+
+```bash
+# 1. 安装 PC 依赖
+cd PC
+pip install pyserial psutil
+
+# 2. 将 Ameba MCU 通过 USB 线连接电脑
+
+# 3. 运行 USB 数据采集器
+python pc_to_usb.py
+```
+
+LCD 屏幕会在数秒内自动显示 CPU/内存/磁盘/网络/GPU/电池等全部 PC 状态。  
+如需室外天气 → 设置 `pc_to_usb.py` 中的 `WEATHER_ENABLED = True` 并配置 API Key。  
+如需 SHT3X 温湿度 → 需额外硬件和 MQTT Broker。
+
+---
+
+#### 📋 完整配置流程（含编译）
 
 1️⃣ **初始化 SDK 环境**
 
@@ -211,23 +271,38 @@ python ameba.py build
 # 或使用别名：bb（编译）、bp（并行编译）
 ```
 
-3️⃣ **配置参数** — 详见下方 [⚙️ 配置参考](#配置参考)
-- WiFi 凭证 → `wifi_reconnect.h`
-- MQTT 凭证 → `pc_dashboard.h`
+3️⃣ **配置参数** — 详见下方 [配置参考](#配置参考)
+
+**模式选择（Kconfig）：**
+- **USB CDC 模式**（ST7262 默认）— 在 `prj.conf` 中设置 `CONFIG_USB_CDC_MODE=y`，或通过 `ameba.py menuconfig` 启用。无需 WiFi 凭证。
+- **MQTT 模式** — 在 `prj.conf` 中设置 `CONFIG_USB_CDC_MODE=n`（或 `# CONFIG_USB_CDC_MODE is not set`）。屏幕选择在 `ameba.py menuconfig` 中切换。
+
+通用配置：
+- MQTT 凭证 → `pc_dashboard.h`（MQTT 模式或 PC 端 SHT3X 转发时需要）
 - 天气 → `weather.c`
-- 告警阈值 → `threshold_config.h`
+- 统一配置 → `threshold_config.h`（告警阈值/超时/背光/重试）
 
 4️⃣ **运行 PC 端采集器**
 
+> 提供两种采集脚本：
+> - **`pc_to_emqx.py`** — 通过 MQTT 发布（MCU 可通过 Wi-Fi 连接 Broker 时使用）。
+> - **`pc_to_usb.py`** — 通过 USB 线缆直接发送（无需网络，延迟更低）。
+>
 > `PC/pc_to_emqx.py` 中的 MQTT Broker 设置需与 MCU 端保持一致。
 ```bash
 cd PC
 pip install -r requirements.txt
+
+# 选项 A：USB CDC（先通过 USB 线缆连接 Ameba）
+python pc_to_usb.py
+
+# 选项 B：MQTT
 python pc_to_emqx.py
 ```
-> ⚠️ 使用 `-d` 或 `--debug` 参数可运行调试模式（仅打印 JSON 到终端，不连接 MQTT）：
+> ⚠️ 使用 `-d` 或 `--debug` 参数可运行调试模式（仅打印 JSON 到终端，不连接 MQTT/串口）：
 ```bash
 > python pc_to_emqx.py --debug
+> python pc_to_usb.py --debug
 ```
 
 5️⃣ **烧录与串口监视**
@@ -255,9 +330,9 @@ python ameba.py monitor --port COMx --b 1500000
 
 | 主题 | 颜色 | 背景 |
 |------|------|------|
-| **COBALT** | Intel 蓝色系 | 平铺 Intel 标志水印 |
-| **INFERNO** | AMD 红色系 | 平铺 AMD 标志水印 |
-| **SILICON** | Apple 银灰色系 | 居中 Apple 标志水印 |
+| **COBALT** | Blue geometric | 平铺蓝色几何图案 |
+| **INFERNO** | Red geometric | 平铺红色几何图案 |
+| **SILICON** | Gray technical | 居中灰色几何图案 |
 
 ---
 
@@ -266,7 +341,7 @@ python ameba.py monitor --port COMx --b 1500000
 
 #### 🌤️ 室外天气
 
-仪表盘支持两种天气数据来源，通过 `WEATHER_FETCH_MCU` 宏切换（默认 `1` = MCU 直接获取）：
+仪表盘支持两种天气数据来源，通过 `WEATHER_FETCH_MCU` 宏切换（默认 `0` = PC 通过 USB/MQTT 推送）：
 
 **MCU 模式（`WEATHER_FETCH_MCU=1`）**
 MCU 每 10 分钟通过 HTTP GET 直接访问 OpenWeatherMap API，无需 PC 端配合。
@@ -283,7 +358,7 @@ MCU 每 10 分钟通过 HTTP GET 直接访问 OpenWeatherMap API，无需 PC 端
 > ⚠️ 建议使用坐标查询（`lat`/`lon`）而非城市名（`q=`），中国大陆城市坐标查询精度更高。
 
 **PC 模式（`WEATHER_FETCH_MCU=0`）**
-MCU 不发起 HTTP 请求，天气数据由 PC 端采集器通过 MQTT `pc/weather` 主题推送。MCU 端的 `weather_update_from_mqtt()` 解析 JSON 中的天气字段并更新 UI。此模式下 weather 任务仅保持休眠。
+MCU 不发起 HTTP 请求，天气数据由 PC 端采集器通过 MQTT `pc/weather` 主题推送。MCU 端的 `weather_update_data()` 解析 JSON 中的天气字段并更新 UI。此模式下 weather 任务仅保持休眠。
 
 **UI 显示**
 天气信息展示在底部环境栏右侧：天气图标 + 天气描述（如 "Clear"）+ 温度/湿度 + 城市名。
@@ -323,12 +398,19 @@ PC 锁屏时，仪表盘自动切换到模拟时钟界面：
 
 ### 💻 PC 端采集器
 
-Python 脚本（`PC/pc_to_emqx.py`）负责采集本地 PC 硬件状态并通过 MQTT 发布。
+提供两种 Python 脚本采集 PC 硬件状态并发送给 Ameba：
+
+| 脚本 | 传输方式 | 需求 | 适用场景 |
+|------|----------|------|----------|
+| `PC/pc_to_usb.py` | USB CDC ACM（虚拟串口）+ MQTT 获取 SHT3X | USB 线缆连接 PC↔Ameba | MCU 无需 WiFi；PC 转发天气和 SHT3X 数据 |
+| `PC/pc_to_emqx.py` | MQTT（TLS 8883） | Wi-Fi + Broker 访问 | 远程场景、IoT 集成 |
+
+两种脚本采集相同的指标集（见下文）。天气数据在启用时会打包进 JSON 载荷。
 
 #### 🔧 主要功能
 
 - **硬件监控** — CPU、内存、磁盘、GPU、网络、电池、Swap、磁盘 I/O
-- **Libre Hardware Monitor（LHM）集成** — Windows 下通过 `pythonnet` 加载 `LibreHardwareMonitorLib.dll`，获取全面的传感器数据（CPU Package/核心温度、风扇转速、电压、功耗）。若 LHM 不可用则回退到 `nvidia-smi` / `wmic`。
+- **Libre Hardware Monitor（LHM）集成** — Windows 下通过 `pythonnet` 加载 `LibreHardwareMonitorLib.dll`，获取全面的传感器数据（CPU Package/核心温度、风扇转速、电压、功耗）。若 LHM 不可用则回退到 `nvidia-smi`（NVIDIA）或 `wmic`。
 - **锁屏检测** — 检测 Windows（LogonUI.exe）和 Linux（dbus logind）锁屏事件，通过 `pc/event` 主题发布，使 MCU 进入待机时钟模式。
 - **LHM GPU 回填** — 为非 NVIDIA 显卡（Intel/AMD）补充 GPU 使用率、显存用量和温度数据。
 
@@ -348,6 +430,8 @@ Python 脚本（`PC/pc_to_emqx.py`）负责采集本地 PC 硬件状态并通过
 | Swap 用量 | `psutil.swap_memory()` | `swap_*` |
 | 电池 | `psutil.sensors_battery()` | `battery_*` |
 | 系统信息 | `platform.*`, `socket.gethostname()` | `hostname`, `os_platform` |
+| 室外天气 | OpenWeatherMap API（PC 通过 USB JSON，或 MCU HTTP） | `weather_*`（在 stats JSON 中） |
+| SHT3X 温湿度 | PC 从 MQTT `humiture/measurement` 转发（USB‑CDC 模式），或直接 MQTT | `sht3x_*`（在 stats JSON 中） |
 | 锁屏事件 | 进程/dbus 检测 | `pc/event`（独立主题） |
 
 #### 📦 自动虚拟环境（Auto-Venv）
@@ -361,7 +445,7 @@ Python 脚本（`PC/pc_to_emqx.py`）负责采集本地 PC 硬件状态并通过
 
 - Python 3.7+
 - `psutil` — 系统状态采集
-- `paho-mqtt` — MQTT 客户端
+- `paho-mqtt` — MQTT 发布及 SHT3X 订阅（USB-CDC 模式下 `pc_to_usb.py` 需要）
 - `pythonnet`（Windows）— LHM DLL 集成
 - `WMI`（Windows）— WMI GPU 检测
 
@@ -375,14 +459,16 @@ GPU 监控使用三级回退策略：`nvidia-smi`（NVIDIA）→ WMI `Win32_Vide
 
 如需全面的传感器数据（CPU Package 温度、风扇转速、电压、功耗），请安装 [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)（便携版，无需安装）。脚本会自动从默认下载路径或运行中的 LHM 进程查找 DLL。
 
-#### 📡 MQTT 主题
+#### 📡 数据传输
 
-| 主题 | 方向 | 载荷 | 间隔 |
-|------|------|------|------|
-| `pc/stats` | 发布 | 所有指标的平面 JSON | 每 3 秒 |
-| `pc/event` | 发布 | `{"event": "lock"}` 或 `{"event": "unlock"}` | 锁屏状态变化时（retained） |
+| 传输方式 | 通道 | 载荷 | 间隔 |
+|----------|------|------|------|
+| **USB CDC**（虚拟串口） | PC ↔ Ameba 通过 USB 线缆 | 换行符分隔的 JSON（`\n` 结尾） | 每 3 秒 |
+| **MQTT** | `pc/stats` 主题 | 平面 JSON | 每 3 秒 |
+| **MQTT** | `pc/event` 主题 | `{"event": "lock"}` 或 `{"event": "unlock"}` | 锁屏状态变化时（retained） |
+| **MQTT**（PC 端，USB-CDC 模式） | `humiture/measurement` 主题 | `{"temperature_C":...,"humidity":...}` | PC 转发到 USB JSON |
 
-脚本向 `pc/stats` 主题发布平面 JSON 数据。示例：
+两种传输方式的 JSON 载荷格式相同。`pc/stats` 示例：
 
 ```json
 {
@@ -421,7 +507,7 @@ MCU 通过 `strstr()` 直接解析这些平面键值对，无需外部 JSON 库�
 
 ```c
 #define MQTT_BROKER_ADDRESS     "你的Broker地址.emqxsl.cn"
-#define MQTT_CLIENT_ID          "PC_DASHBOARD_MCU_1_COM19"  /* 由 USE_DBL070 宏自动选择 */
+#define MQTT_CLIENT_ID          "PC_DASHBOARD_MCU_1_COM19"  /* 由 CONFIG_SCREEN_DBL070 宏自动选择 */
 #define MQTT_USERNAME           "你的用户名"
 #define MQTT_PASSWORD           "你的密码"
 ```
@@ -432,7 +518,7 @@ MCU 通过 `strstr()` 直接解析这些平面键值对，无需外部 JSON 库�
 
 | 宏 | 默认值 | 说明 |
 |----|--------|------|
-| `WEATHER_FETCH_MCU` | `1` | `1`=MCU HTTP 模式，`0`=PC MQTT 推送模式 |
+| `WEATHER_FETCH_MCU` | `0` | `0`=PC 推送（USB/MQTT），`1`=MCU HTTP 模式 |
 | `WEATHER_API_KEY` | `0e5a...78ab5` | OpenWeatherMap API 密钥 |
 | `WEATHER_LAT` | `31.34` | 纬度（默认苏州姑苏区） |
 | `WEATHER_LON` | `120.61` | 经度 |
@@ -452,6 +538,12 @@ MCU 通过 `strstr()` 直接解析这些平面键值对，无需外部 JSON 库�
 | `bat_low_pct` | 20.0% | 电池低电量 |
 | `env_temp_c` | 35.0°C | 环境温度 |
 | `flash_interval_ms` | 150ms | 闪烁间隔 |
+| `CONNECTION_TIMEOUT_MS` | 12000ms | 数据新鲜度超时（PC 断连检测） |
+| `UI_UPDATE_INTERVAL_MS` | 1000ms | LVGL 定时器间隔 |
+| `RETRY_LIMIT` | 10 | WiFi 最大重连次数 |
+| `RETRY_INTERVAL` | 5000ms | WiFi 重连间隔 |
+| `BL_MIN_PCT` | 10% | 背光硬件最低亮度 |
+| `BL_STEP_PCT` | 10% | 背光步进值 |
 
 #### 📁 其他配置
 

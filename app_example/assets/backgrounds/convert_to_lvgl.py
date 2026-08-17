@@ -1,5 +1,5 @@
 """
-Convert 128x128 PNG backgrounds to LVGL 9.3 C arrays.
+Convert PNG backgrounds to LVGL 9.3 C arrays.
 
 Supports two output formats:
   - RGB565       (no alpha, smaller): for solid / full-frame images
@@ -17,9 +17,9 @@ INPUT_DIR = os.path.dirname(os.path.abspath(__file__))
 # FILE_MAP: "your_image.png" -> ("struct_name", "bitmap_array_name")
 # The script auto-detects alpha: RGBA PNG -> RGB565A8, RGB PNG -> RGB565.
 FILE_MAP = {
-    "bg_cobalt_intel_128.png":  ("bg_cobalt",   "bg_cobalt_bitmap"),
-    "bg_inferno_amd_128.png":   ("bg_inferno",  "bg_inferno_bitmap"),
-    "bg_silicon_apple_205.png": ("bg_silicon",  "bg_silicon_bitmap"),
+    "bg_cobalt_128.png":         ("bg_cobalt",   "bg_cobalt_bitmap"),
+    "bg_inferno_128.png":        ("bg_inferno",  "bg_inferno_bitmap"),
+    "mcu.png":                   ("bg_silicon", "bg_silicon_bitmap"),
     "clock432.png":             ("clock432",    "clock432_bitmap"),
 }
 
@@ -111,7 +111,7 @@ const lv_image_dsc_t {struct_name} = {{
     .data = {bitmap_name},
 }};
 """
-    with open(c_path, "w", encoding="utf-8") as f:
+    with open(c_path, "w", encoding="utf-8", newline="\n") as f:
         f.write(c_code)
 
     print(f"  -> {c_path}")

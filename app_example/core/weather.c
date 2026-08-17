@@ -1,10 +1,16 @@
 #include "core/weather.h"
 #include "FreeRTOS.h"
 #include "basic_types.h"
+#include "os_wrapper.h"        /* rtos_time_delay_ms */
 #include "log.h"
+/* lwIP socket/netdb — only needed when MCU fetches weather via HTTP
+   (WEATHER_FETCH_MCU=1).  Guarded because these headers may be unavailable
+   when WiFi Kconfig symbols are disabled (e.g. USB CDC mode).           */
+#if WEATHER_FETCH_MCU == 1
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
 #include "lwip_netconf.h"
+#endif
 #include "platform_stdlib.h"
 #include "config/sdk_compat.h"
 #include "task.h"
@@ -477,7 +483,7 @@ void weather_fetch_task(void* param)
     RTK_LOGI(TAG, "Weather task started (PC mode — MQTT driven, no HTTP)\n");
 
     /* Nothing to do — weather data is pushed by PC via MQTT and
-     * populated into g_weather by weather_update_from_mqtt().
+     * populated into g_weather by weather_update_data().
      * Task exists only for code symmetry (always created in app_main.c). */
     while (1)
     {
@@ -486,10 +492,10 @@ void weather_fetch_task(void* param)
 }
 
 /* ========================================================================
- * MQTT weather updater — called from pc_dashboard.c JSON parser
+ * Weather data updater — called from pc_dashboard.c JSON parser
  * ======================================================================== */
 
-void weather_update_from_mqtt(float temp_c, int humidity, float wind_speed,
+void weather_update_data(float temp_c, int humidity, float wind_speed,
                               const char* description, const char* city,
                               const char* main_group)
 {
@@ -551,7 +557,7 @@ void weather_update_from_mqtt(float temp_c, int humidity, float wind_speed,
     int w_tf  = w_t10 % 10;
     if (w_tf < 0)
         w_tf = -w_tf;
-    RTK_LOGI(TAG, "Weather from MQTT: %s, %d.%d\xC2\xB0\x43, %d%%\n", g_weather.city, w_ti, w_tf, g_weather.humidity);
+    RTK_LOGI(TAG, "Weather updated: %s, %d.%d\xC2\xB0\x43, %d%%\n", g_weather.city, w_ti, w_tf, g_weather.humidity);
 }
 
 #endif /* WEATHER_FETCH_MCU */

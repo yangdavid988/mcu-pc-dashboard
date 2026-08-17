@@ -1488,8 +1488,13 @@ void create_layout_triad(lv_obj_t* parent)
                         lv_color_make(0x06, 0x06, 0x16));
 
         lv_obj_t* ftr_lbl = lv_label_create(footer);
+#ifdef CONFIG_USB_CDC_MODE
+        lv_label_set_text(ftr_lbl,
+                          " System Monitor  |  USB Connected  |  PC Dashboard v3");
+#else
         lv_label_set_text(ftr_lbl,
                           " System Monitor  |  MQTT Connected  |  PC Dashboard v3");
+#endif
         lv_obj_set_style_text_color(ftr_lbl, lv_color_make(0x66, 0x88, 0xAA), 0);
         lv_obj_set_style_text_font(ftr_lbl, &lv_font_montserrat_14, 0);
         lv_obj_align(ftr_lbl, LV_ALIGN_LEFT_MID, 15, 0);
@@ -2070,12 +2075,17 @@ void create_layout_vortex(lv_obj_t* parent)
                         lv_color_make(0x06, 0x06, 0x16));
 
         lv_obj_t* ftr_lbl = lv_label_create(footer);
+#ifdef CONFIG_USB_CDC_MODE
+        lv_label_set_text(ftr_lbl,
+                          " System Monitor  |  USB Connected  |  PC Dashboard v3");
+#else
         lv_label_set_text(ftr_lbl,
                           " System Monitor  |  MQTT Connected  |  PC Dashboard v3");
+#endif
         lv_obj_set_style_text_color(ftr_lbl, lv_color_make(0x66, 0x88, 0xAA), 0);
         lv_obj_set_style_text_font(ftr_lbl, &lv_font_montserrat_14, 0);
         lv_obj_align(ftr_lbl, LV_ALIGN_LEFT_MID, 15, 0);
-        g_mqtt_status_label = ftr_lbl; /* Dynamic MQTT status update */
+        g_mqtt_status_label = ftr_lbl;
     }
 }
 
@@ -2619,7 +2629,11 @@ void create_layout_pulse(lv_obj_t* parent)
 
         lv_obj_t* ftr_lbl = lv_label_create(footer);
         char      ftr_buf[80];
+#ifdef CONFIG_USB_CDC_MODE
+        snprintf(ftr_buf, sizeof(ftr_buf), " System Monitor  |  USB Connected  |  PC Dashboard v3");
+#else
         snprintf(ftr_buf, sizeof(ftr_buf), " System Monitor  |  MQTT Connected  |  PC Dashboard v3");
+#endif
         lv_label_set_text(ftr_lbl, ftr_buf);
         lv_obj_set_style_text_color(ftr_lbl, lv_color_make(0x66, 0x88, 0xAA), 0);
         lv_obj_set_style_text_font(ftr_lbl, &lv_font_montserrat_14, 0);
@@ -2692,8 +2706,9 @@ void update_layout_triad(void)
     memcpy(&stats, &g_pc_stats, sizeof(PC_Stats_t));
     taskEXIT_CRITICAL();
 
-    if (!stats.has_data)
-        return;
+    /* Note: has_data may be false after pc_stats_reset_to_default() on timeout.
+     * We still run the update so reset (zero/placeholder) values are rendered
+     * on screen instead of frozen stale data. */
 
     /* ---- CPU ---- */
     if (tr_cpu_val || tr_cpu_bar)
@@ -3469,8 +3484,9 @@ void update_layout_vortex(void)
     memcpy(&stats, &g_pc_stats, sizeof(PC_Stats_t));
     taskEXIT_CRITICAL();
 
-    if (!stats.has_data)
-        return;
+    /* Note: has_data may be false after pc_stats_reset_to_default() on timeout.
+     * We still run the update so reset (zero/placeholder) values are rendered
+     * on screen instead of frozen stale data. */
 
     /* ---- CPU ring (Canvas) ---- */
     if (vo_cpu_canvas)
@@ -3891,8 +3907,9 @@ void update_layout_pulse(void)
     memcpy(&stats, &g_pc_stats, sizeof(PC_Stats_t));
     taskEXIT_CRITICAL();
 
-    if (!stats.has_data)
-        return;
+    /* Note: has_data may be false after pc_stats_reset_to_default() on timeout.
+     * We still run the update so reset (zero/placeholder) values are rendered
+     * on screen instead of frozen stale data. */
 
     /* ---- CPU box ---- */
     if (pu_cpu_val)
@@ -4247,8 +4264,10 @@ void update_current_layout(void)
     memcpy(&stats, &g_pc_stats, sizeof(PC_Stats_t));
     taskEXIT_CRITICAL();
 
-    if (!stats.has_data)
-        return;
+    /* Note: has_data may be false after pc_stats_reset_to_default() on timeout.
+     * We still run the update so reset values are rendered on screen instead
+     * of frozen stale data. The per-layout functions handle this gracefully:
+     * fields reset to zero show "0%", N/A fields show placeholders.        */
 
     /* JSON diff: skip all widget updates if display-visible fields haven't
      * changed since last display cycle. */
@@ -4471,9 +4490,11 @@ void update_weather_ui(void)
             if (tr_weather_info)
                 lv_label_set_text(tr_weather_info, info_buf);
             if (tr_weather_main)
+            {
                 lv_label_set_text(tr_weather_main, w.description);
-            if (tr_weather_city)
-                lv_label_set_text(tr_weather_city, w.city);
+                if (tr_weather_city)
+                    lv_label_set_text(tr_weather_city, w.city);
+            }
             if (tr_weather_icon)
                 lv_image_set_src(tr_weather_icon, icon);
             break;

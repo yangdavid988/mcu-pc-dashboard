@@ -22,6 +22,12 @@
 
 void standby_enter(void)
 {
+    /* Idempotent: skip if already in clock mode.  This prevents stale
+     * events (e.g. MQTT retained message + USB CDC) from redundantly
+     * dimming backlight or suspending GPIO.                          */
+    if (g_screen_state == SCREEN_STATE_CLOCK)
+        return;
+
     taskENTER_CRITICAL();
     g_screen_state      = SCREEN_STATE_CLOCK;
     g_pc_event_received = true;
@@ -39,6 +45,10 @@ void standby_enter(void)
 
 void standby_exit(void)
 {
+    /* Idempotent: skip if already in monitor mode. */
+    if (g_screen_state == SCREEN_STATE_MONITOR)
+        return;
+
     taskENTER_CRITICAL();
     g_screen_state      = SCREEN_STATE_MONITOR;
     g_pc_event_received = true;

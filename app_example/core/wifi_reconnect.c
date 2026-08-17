@@ -1,6 +1,28 @@
+#include <platform_autoconf.h>
+
+#ifndef CONFIG_USB_CDC_MODE
+
 #include "core/wifi_reconnect.h"
-#include "rtw_skbuff.h"
-u8 retry_cnt = 0;
+
+/* rtw_reconn / wifi_user_config — SDK auto reconnect globals.
+ * wifi_auto_reconnect.h provides struct rtw_auto_reconn_t definition
+ * and the extern declaration for rtw_reconn.                           */
+#if CONFIG_AUTO_RECONNECT
+#include <wifi_auto_reconnect.h>
+#endif
+
+/* WiFi status flag — shared with UI timer for waiting→monitor transition.
+ * Declared extern here to avoid pulling in pc_dashboard.h (TAG conflict). */
+extern volatile bool g_wifi_connected;
+
+/* g_wifi_retry_exhausted is defined in pc_dashboard.c and declared extern via
+ * wifi_reconnect.h — we reference it here but do not own the definition. */
+
+/* Retry progress counters — updated by wifi_retry_periodic_check() */
+#if CONFIG_AUTO_RECONNECT
+volatile int g_wifi_retry_current = 0;
+volatile int g_wifi_retry_max     = 0;
+#endif
 
 #define TAG "WIFI_RECONNECT"
 
@@ -12,15 +34,19 @@ int user_wifi_connect()
     connect_param.ssid.len     = strlen(SSID);
     connect_param.password     = (unsigned char*) PASSWORD; // u8
     connect_param.password_len = strlen(PASSWORD);
-    int ret                    = 0;
+    int ret;
 
-WIFI_CONNECT:
-    /*Connect*/
-    RTK_LOGI(TAG, "Wifi connect start, retry cnt = %d\r\n", retry_cnt);
+    /* Single connect attempt.
+     *
+     * NOTE: no retry loop here.  If this attempt fails the caller
+     * (wifi_connect_task) reports the result and exits.  Reconnection
+     * after a later disconnection is handled by the SDK internal auto
+     * reconnect (CONFIG_AUTO_RECONNECT).                                */
+    RTK_LOGI(TAG, "Wifi connect start\n");
     ret = wifi_connect(&connect_param, 1); // 1 /* step2: malloc and set synchronous connection related variables*/
     if (ret != RTK_SUCCESS)
     {
-        RTK_LOGI(TAG, "Reconnect Fail:%d\r\n", ret);
+        RTK_LOGI(TAG, "Connect Failed:%d\r\n", ret);
         if ((ret == -RTK_ERR_WIFI_CONN_INVALID_KEY))
         {
             RTK_LOGI(TAG, "(password format wrong)\r\n");
@@ -37,39 +63,24 @@ WIFI_CONNECT:
         {
             RTK_LOGI(TAG, "(other)\r\n");
         }
+        return RTK_FAIL;
     }
 
     /*DHCP*/
-    if (ret == RTK_SUCCESS)
+    RTK_LOGI(TAG, "Wifi connect success, Start DHCP\n");
+    ret = COMPAT_REQUEST_IP(NETIF_WLAN_STA_INDEX);
+    gpio_toggle((u32) LED1_PIN, 0); // DHCP wait for 500ms
+    if (ret == DHCP_ADDRESS_ASSIGNED)
     {
-        RTK_LOGI(TAG, "Wifi connect success, Start DHCP\n");
-        ret = COMPAT_REQUEST_IP(NETIF_WLAN_STA_INDEX);
-        gpio_toggle((u32) LED1_PIN, 0); // DHCP wait for 500ms
-        if (ret == DHCP_ADDRESS_ASSIGNED)
-        {
-            RTK_LOGI(TAG, "DHCP Success\r\n");
-            retry_cnt = 0;
-            return RTK_SUCCESS;
-        }
-        else
-        {
-            RTK_LOGI(TAG, "DHCP Fail\r\n");
-            wifi_disconnect();
-        }
-    }
-
-    /*Reconnect when connect fail or DHCP fail*/
-    retry_cnt++;
-    if (retry_cnt >= RETRY_LIMIT)
-    {
-        RTK_LOGI(TAG, "Reconnect limit reach, Wifi connect fail\r\n");
-        return RTK_FAIL;
+        RTK_LOGI(TAG, "DHCP Success\r\n");
+        g_wifi_connected = true;
+        return RTK_SUCCESS;
     }
     else
     {
-        // rtos_time_delay_ms(RETRY_INTERVAL);
-        gpio_toggle((u32) LED2_PIN, RETRY_INTERVAL);
-        goto WIFI_CONNECT;
+        RTK_LOGI(TAG, "DHCP Fail\r\n");
+        wifi_disconnect();
+        return RTK_FAIL;
     }
 }
 
@@ -117,27 +128,54 @@ void gpio_toggle(u32 GPIO_Pin, int time_ms)
 void wifi_connect_task()
 {
     RTK_LOGI(TAG, "start\r\n");
+#if CONFIG_AUTO_RECONNECT
+    wifi_set_autoreconnect(1);
+    RTK_LOGI(TAG, "SDK auto reconnect enabled\n");
+#endif
 
-    /* Wait wifi init finish
-    Check if the specified wlan interface is running.
-    1 running,0 is not, softap interface is 1,sta iface = 0*/
     while (!(wifi_is_running(STA_WLAN_INDEX)))
     {
         gpio_toggle((u32) LED2_PIN, 200);
     }
     GPIO_WriteBit(LED2_PIN, 1);
-    /* Start connect */
-    if (user_wifi_connect() != RTK_SUCCESS)
+
+    /* Retry initial connect — SDK auto reconnect only applies AFTER a
+     * DISCONNECT event, so we must retry the initial connect ourselves.  */
+#if CONFIG_AUTO_RECONNECT
+    g_wifi_retry_max = wifi_user_config.auto_reconnect_count;
+    for (int retry = 0; retry <= g_wifi_retry_max; retry++)
     {
-        RTK_LOGE(TAG, "user_wifi_connect failed!\r\n");
-        GPIO_WriteBit(LED2_PIN, 0);
-    }
-    else
+        /* Update UI counter (rtw_reconn.cnt is 0 before first DISCONNECT) */
+        g_wifi_retry_current = retry;
+#else
+    /* No SDK auto-reconnect — try once only */
     {
-        GPIO_WriteBit(LED2_PIN, 0);
-        GPIO_WriteBit(LED1_PIN, 1);
+#endif
+        if (user_wifi_connect() == RTK_SUCCESS)
+        {
+            g_wifi_connected = true;
+        #if CONFIG_AUTO_RECONNECT
+            g_wifi_retry_current = 0;
+        #endif
+            GPIO_WriteBit(LED2_PIN, 0);
+            GPIO_WriteBit(LED1_PIN, 1);
+            goto connect_done;
+        }
+
+#if CONFIG_AUTO_RECONNECT
+        gpio_toggle((u32) LED2_PIN, 0); /* flash red LED while retrying */
+        rtos_time_delay_ms(5000);
     }
 
+    /* All retries exhausted */
+    g_wifi_retry_exhausted = true;
+    g_wifi_retry_current   = g_wifi_retry_max;
+    RTK_LOGE(TAG, "All %d connect attempts failed!\r\n", g_wifi_retry_max + 1);
+#else
+    RTK_LOGE(TAG, "user_wifi_connect failed!\r\n");
+#endif /* CONFIG_AUTO_RECONNECT */
+
+connect_done:
     rtos_task_delete(NULL);
 }
 
@@ -146,48 +184,92 @@ struct rtw_event_hdl_func_t event_external_hdl[1] = {
 };
 u16 array_len_of_event_external_hdl = sizeof(event_external_hdl) / sizeof(struct rtw_event_hdl_func_t);
 
-// Wifi connection status changes trigger this event handler; reconnect to AP is based on this function
+
 void wifi_join_status_event_hdl(u8* evt_info)
 {
     struct rtw_event_join_status_info* join_status_info = (struct rtw_event_join_status_info*) evt_info;
     u8                                 join_status      = join_status_info->status;
-    struct rtw_event_disconnect*       disconnect;
 
-    /*Reconnect when disconnect after connected*/
-    if (join_status == RTW_JOINSTATUS_DISCONNECT)
+    if (join_status == RTW_JOINSTATUS_SUCCESS)
     {
-        disconnect = &join_status_info->priv.disconnect;
+        g_wifi_connected       = true;
+        g_wifi_retry_exhausted = false;
+    #if CONFIG_AUTO_RECONNECT
+        g_wifi_retry_current   = 0;
+    #endif
+        GPIO_WriteBit(LED2_PIN, 0);
+        GPIO_WriteBit(LED1_PIN, 1);
+        RTK_LOGI(TAG, "WiFi connected (via event)\n");
+    }
+    else if (join_status == RTW_JOINSTATUS_DISCONNECT)
+    {
+        struct rtw_event_disconnect* disconnect = &join_status_info->priv.disconnect;
         GPIO_WriteBit(LED1_PIN, 0);
-        /*Disconnect by APP no need do reconnect*/
-        /*RTK defined: Application layer call some API to cause wifi disconnect.*/
-        if (disconnect->disconn_reason > RTW_DISCONN_RSN_APP_BASE && disconnect->disconn_reason < RTW_DISCONN_RSN_APP_BASE_END)
+        g_wifi_connected = false;
+
+        if (disconnect->disconn_reason > RTW_DISCONN_RSN_APP_BASE &&
+            disconnect->disconn_reason < RTW_DISCONN_RSN_APP_BASE_END)
         {
             GPIO_WriteBit(LED2_PIN, 1);
             return;
         }
 
-        /*Creat a task to do wifi reconnect because call WIFI API in WIFI event is not safe*/
-        if (rtos_task_create(NULL, "wifi_reconnect_task", (rtos_task_t) wifi_reconnect_task, NULL, 2048, tskIDLE_PRIORITY + 1) != RTK_SUCCESS)
+        RTK_LOGI(TAG, "WiFi disconnected — SDK auto reconnect ongoing\n");
+    }
+}
+
+/* ========================================================================
+ * Periodic check — call from MQTT park loop or LVGL timer (~1s interval)
+ *
+ * 1. Update g_wifi_retry_current / g_wifi_retry_max for UI progress
+ * 2. Poll wifi_get_join_status() to detect SDK reconnection
+ * 3. Already flagged exhausted → try user_wifi_connect() recovery
+ * 4. NOT exhausted → check rtw_reconn.cnt to detect exhaustion
+ * ======================================================================== */
+void wifi_retry_periodic_check(void)
+{
+    if (g_wifi_connected)
+        return;
+
+    /* Update retry counters for UI — mirror SDK auto-reconnect progress.
+     * Guard: only overwrite current when rtw_reconn.cnt > 0.  During
+     * initial connect (before any DISCONNECT event) rtw_reconn.cnt is 0,
+     * and wifi_connect_task drives the count via its own retry loop.     */
+#if CONFIG_AUTO_RECONNECT
+    if (rtw_reconn.cnt > 0)
+        g_wifi_retry_current = rtw_reconn.cnt;
+    g_wifi_retry_max = wifi_user_config.auto_reconnect_count;
+#endif
+
+    /* Poll: if reconnected already, mark connected and done */
+    {
+        u8 join_status;
+        if (wifi_get_join_status(&join_status) == RTK_SUCCESS &&
+            join_status == RTW_JOINSTATUS_SUCCESS)
         {
-            RTK_LOGI(TAG, "Create reconnect task failed\n");
+            g_wifi_connected = true;
+            g_wifi_retry_exhausted = false;
+        #if CONFIG_AUTO_RECONNECT
+            g_wifi_retry_current = 0;
+        #endif
+            GPIO_WriteBit(LED2_PIN, 0);
+            GPIO_WriteBit(LED1_PIN, 1);
+            return;
         }
     }
+
+    if (g_wifi_retry_exhausted)
+        return; /* show UI popup, no more retries */
+
+    /* Detect SDK exhaustion: cnt > max and not mid-retry */
+#if CONFIG_AUTO_RECONNECT
+    if (rtw_reconn.cnt > wifi_user_config.auto_reconnect_count &&
+        rtw_reconn.b_waiting == 0 && rtw_reconn.b_ongoing == 0)
+    {
+        g_wifi_retry_exhausted = true;
+        g_wifi_retry_current   = wifi_user_config.auto_reconnect_count;
+    }
+#endif
 }
 
-void wifi_reconnect_task()
-{
-    // do reconnect,call wifi connect func
-    gpio_toggle((u32) LED2_PIN, RETRY_INTERVAL);
-    if (user_wifi_connect() != RTK_SUCCESS)
-    {
-        RTK_LOGE(TAG, "user_wifi_connect failed!\r\n");
-        GPIO_WriteBit(LED2_PIN, 0);
-    }
-    else
-    {
-        GPIO_WriteBit(LED2_PIN, 0);
-        GPIO_WriteBit(LED1_PIN, 1);
-    }
-
-    rtos_task_delete(NULL);
-}
+#endif /* !CONFIG_USB_CDC_MODE */

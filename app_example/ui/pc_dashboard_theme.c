@@ -18,7 +18,7 @@ theme_id_t  g_theme_id  = DEFAULT_THEME;
  * Theme color tables
  * ======================================================================== */
 
-/* --- COBALT: Intel Blue --- */
+/* --- COBALT: blue geometric palette --- */
 
 const theme_t g_themes[THEME_MAX] = {
     /* THEME_COBALT */
@@ -128,15 +128,15 @@ static void theme_watermark_update(void)
     if (g_theme_id == THEME_SILICON)
     {
         /* Centered, non-tiled watermark for SILICON theme */
-        lv_obj_set_size(g_bg_watermark, 205, 205);
+        lv_obj_set_size(g_bg_watermark, 200, 200);
         lv_obj_set_pos(g_bg_watermark,
-                       (SCREEN_WIDTH - 205) / 2,
-                       (SCREEN_HEIGHT - 205) / 2);
+                       (SCREEN_WIDTH - 200) / 2,
+                       (SCREEN_HEIGHT - 200) / 2);
         lv_obj_set_style_bg_image_tiled(g_bg_watermark, false, 0);
     }
     else
     {
-        /* Full-screen tiled watermark for COBALT / INFERNO */
+        /* Full-screen tiled watermark for blue / red themes */
         lv_obj_set_size(g_bg_watermark, SCREEN_WIDTH, SCREEN_HEIGHT);
         lv_obj_set_pos(g_bg_watermark, 0, 0);
         lv_obj_set_style_bg_image_tiled(g_bg_watermark, true, 0);

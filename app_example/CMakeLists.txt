@@ -6,8 +6,21 @@ ameba_global_include(${CMAKE_CURRENT_SOURCE_DIR})
 # Use project-specific lv_conf instead of SDK default
 ameba_global_define(LV_CONF_PATH="config/lv_conf_project.h")
 
-# ===== Screen selection (uncomment the next line to switch to DBL070 instead) =====
-add_definitions(-DUSE_DBL070)
+# ===== Screen + Mode selection =====
+# These are configured via Kconfig:  pc_dashboard_demo/Kconfig
+#   - Screen:       CONFIG_SCREEN_ST7262 (default) / CONFIG_SCREEN_DBL070
+#   - USB CDC mode: CONFIG_USB_CDC_MODE (depends on SCREEN_ST7262)
+#
+# NOTE: Kconfiglib uses OR-semantics for second-definition 'depends on'
+# on existing Symbols, so secondary config blocks cannot constrain SDK
+# symbols — they can only expand visibility.  Use bms menuconfig to
+# manually set USB/WiFi options when switching between ST7262 (USB CDC)
+# and DBL070 (WiFi) modes.
+#
+# The Kconfig pipeline generates platform_autoconf.h per core (KM4NS/KM4TZ)
+# which is included globally via the SDK include path.  No add_definitions()
+# is needed — platform_autoconf.h provides the CONFIG_* defines to all
+# compilation units.
 
 # ===== Private: builds our target =====
 set(private_sources)
@@ -15,7 +28,9 @@ ameba_list_append(private_sources
     # main/
     main/app_main.c
     # core/
-    core/pc_dashboard.c core/standby_manager.c core/weather.c core/wifi_reconnect.c
+    core/pc_dashboard.c core/standby_manager.c core/weather.c core/wifi_reconnect.c core/usb_cdc_receiver.c
+    # hal/usb/
+    hal/usb/usbd_cdc_acm_custom.c
     # ui/
     ui/pc_dashboard_ui.c ui/pc_dashboard_lock_screen.c ui/pc_dashboard_theme.c ui/pc_dashboard_layout.c
     # hal/
@@ -38,4 +53,8 @@ ameba_list_append(private_sources
 ameba_add_internal_library(app_example
     p_SOURCES
         ${private_sources}
+    p_INCLUDES
+        ${BASEDIR}/component/usb/common
+        ${BASEDIR}/component/usb/device/core
+        ${BASEDIR}/component/usb/device/cdc_acm
 )

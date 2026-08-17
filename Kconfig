@@ -1,1 +1,52 @@
-# Please refer to https://aiot.realmcu.com/en/latest/rtos/sdk/sdk_config/index.html
+#
+# Dashboard Application Kconfig options
+# These are sourced by the Ameba SDK via:
+#   component/soc/amebagreen2/project/Kconfig → orsource "${RTK_APP_DIR}/Kconfig"
+#
+# Use "ameba.py menuconfig" or "bm" to configure interactively.
+#
+
+menu "Dashboard Application"
+
+choice
+    prompt "Display panel"
+    default SCREEN_ST7262
+    help
+        Select the display panel module.
+
+config SCREEN_ST7262
+    bool "ST7262 (800x480 RGB-565 parallel, has USB pins)"
+
+config SCREEN_DBL070
+    bool "DBL070 (800x480 RGB-565 parallel, no USB pins)"
+endchoice
+
+config USB_CDC_MODE
+    bool "USB CDC mode (ST7262 only, all data via USB cable)"
+    default y
+    depends on SCREEN_ST7262
+    select USB_OTG_EN_MENU
+    # NOTE: USBD_CDC_ACM_MENU is deliberately NOT selected here.
+    # Our custom wrapper (usbd_cdc_acm_custom.c) replaces the SDK
+    # source with a private PID 0xF852 — the SDK's usbd_cdc_acm.c
+    # would cause duplicate-symbol errors if compiled alongside it.
+    # prj.conf sets CONFIG_USBD_CDC_ACM_MENU=n; the wrapper also
+    # has a compile-time #error guard if ACM is manually re-enabled.
+    help
+        When enabled: MCU receives all data via USB from the PC.
+        WiFi is bypassed — the MCU needs no network connection.
+        USB (USB_OTG, CDC ACM) is force-enabled via select.
+
+        When disabled: original MQTT mode with WiFi, usable on any
+        panel. USB should also be disabled.
+
+        NOTE: Kconfiglib uses OR-semantics for second-definition
+        'depends on' on Symbols, so constraints on existing SDK
+        symbols here cannot restrict — they can only expand
+        visibility.  Use bms menuconfig to manually set USB and
+        WiFi options when switching screen panels.
+
+        Only available with ST7262 screen. DBL070 has no USB pins
+        and forces this option off.
+
+endmenu

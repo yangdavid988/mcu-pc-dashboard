@@ -24,9 +24,9 @@ extern "C"
      * ======================================================================== */
     typedef enum
     {
-        THEME_COBALT  = 0, /* Intel Blue */
-        THEME_INFERNO = 1, /* AMD Red */
-        THEME_SILICON = 2, /* Apple Silver */
+        THEME_COBALT  = 0, /* Blue geometric */
+        THEME_INFERNO = 1, /* Red geometric */
+        THEME_SILICON = 2, /* Gray technical */
         THEME_MAX
     } theme_id_t;
 
@@ -41,7 +41,7 @@ extern "C"
 #endif
 
 /* ========================================================================
- * Brand names
+ * Theme names
  * ======================================================================== */
 #define LAYOUT_NAME_TRIAD  "TRIAD"
 #define LAYOUT_NAME_VORTEX "VORTEX"

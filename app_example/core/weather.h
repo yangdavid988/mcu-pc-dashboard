@@ -17,7 +17,7 @@
  * pc_dashboard.c — define it once here or override in your build system.
  * ======================================================================== */
 #ifndef WEATHER_FETCH_MCU
-#define WEATHER_FETCH_MCU 1 /* 0 = PC pushes via MQTT, 1 = MCU fetches HTTP */
+#define WEATHER_FETCH_MCU 0 /* 0 = PC pushes via USB/MQTT, 1 = MCU fetches HTTP */
 #endif
 
 /* ========================================================================
@@ -56,15 +56,15 @@ extern Weather_Data_t g_weather;         /* Latest weather data (read-only from 
  *
  *  In MCU mode (WEATHER_FETCH_MCU=1): performs HTTP GET to OpenWeatherMap.
  *  In PC  mode (WEATHER_FETCH_MCU=0): task sleeps forever; weather data
- *  arrives via MQTT and is pushed into g_weather by weather_update_from_mqtt(). */
+ *  arrives via MQTT/USB and is pushed into g_weather by weather_update_data(). */
 void weather_fetch_task(void* param);
 
 #if WEATHER_FETCH_MCU == 0
-/** Update weather data from PC-pushed MQTT fields.
+/** Update weather data from PC-pushed (MQTT or USB) fields.
  *  Called by parse_pc_stats_json() in pc_dashboard.c when weather_*
- *  fields are present in the MQTT payload.
+ *  fields are present in the JSON payload (arrives via MQTT or USB).
  *  Sets g_weather_updated = true so the UI timer refreshes weather display. */
-void weather_update_from_mqtt(float temp_c, int humidity, float wind_speed,
+void weather_update_data(float temp_c, int humidity, float wind_speed,
                               const char* description, const char* city,
                               const char* main_group);
 #endif
