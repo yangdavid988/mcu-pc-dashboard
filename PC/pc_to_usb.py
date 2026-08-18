@@ -241,29 +241,34 @@ class ScreenLockDetector:
         return False
 
     def _check_linux(self):
-        """Check if current user session is locked via logind LockedHint."""
+        """Check if current user session is locked via loginctl CLI (zero extra deps)."""
         try:
-            import dbus
-            bus = dbus.SystemBus()
-            login = bus.get_object('org.freedesktop.login1',
-                                   '/org/freedesktop/login1')
-            manager = dbus.Interface(login,
-                                     'org.freedesktop.login1.Manager')
-            sessions = manager.ListSessions()
             my_uid = os.getuid()
-            for sid, uid, uname, seat, vtn in sessions:
-                if uid != my_uid:
-                    continue
-                spath = f'/org/freedesktop/login1/session/{sid}'
-                sobj = bus.get_object('org.freedesktop.login1', spath)
-                props = dbus.Interface(sobj,
-                                       'org.freedesktop.DBus.Properties')
-                locked = props.Get('org.freedesktop.login1.Session',
-                                   'LockedHint')
-                if locked:
-                    return True
-            return False
-        except Exception:
+            result = subprocess.run(
+                ["loginctl", "list-sessions", "--no-legend"],
+                capture_output=True, text=True, timeout=3
+            )
+            if result.returncode != 0:
+                return False
+            my_session_id = None
+            for line in result.stdout.strip().split('\n'):
+                parts = line.split()
+                if len(parts) >= 3:
+                    try:
+                        if int(parts[1]) == my_uid:
+                            my_session_id = parts[0]
+                            break
+                    except ValueError:
+                        continue
+            if my_session_id is None:
+                return False
+            result = subprocess.run(
+                ["loginctl", "show-session", my_session_id, "-p", "LockedHint"],
+                capture_output=True, text=True, timeout=3
+            )
+            return 'LockedHint=yes' in result.stdout
+        except Exception as e:
+            diag_log(f"[LOCK-DIAG] _check_linux failed: {e}")
             return False
 
     def has_state_changed(self, currently_locked):

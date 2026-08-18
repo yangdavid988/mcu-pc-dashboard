@@ -19,7 +19,7 @@
 #include "lv_conf.h"
 
 #undef LV_USE_PERF_MONITOR
-#define LV_USE_PERF_MONITOR 1
+#define LV_USE_PERF_MONITOR 0
 
 /* ========================================================================
  * Color — override to 32-bit ARGB8888 to match LCDC HW format.

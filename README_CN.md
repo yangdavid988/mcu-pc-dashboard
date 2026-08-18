@@ -411,7 +411,7 @@ PC 锁屏时，仪表盘自动切换到模拟时钟界面：
 
 - **硬件监控** — CPU、内存、磁盘、GPU、网络、电池、Swap、磁盘 I/O
 - **Libre Hardware Monitor（LHM）集成** — Windows 下通过 `pythonnet` 加载 `LibreHardwareMonitorLib.dll`，获取全面的传感器数据（CPU Package/核心温度、风扇转速、电压、功耗）。若 LHM 不可用则回退到 `nvidia-smi`（NVIDIA）或 `wmic`。
-- **锁屏检测** — 检测 Windows（LogonUI.exe）和 Linux（dbus logind）锁屏事件，通过 `pc/event` 主题发布，使 MCU 进入待机时钟模式。
+- **锁屏检测** — 检测 Windows（LogonUI.exe）和 Linux（loginctl）锁屏事件，通过 `pc/event` 主题发布，使 MCU 进入待机时钟模式。
 - **LHM GPU 回填** — 为非 NVIDIA 显卡（Intel/AMD）补充 GPU 使用率、显存用量和温度数据。
 
 #### 📊 采集指标
@@ -432,7 +432,7 @@ PC 锁屏时，仪表盘自动切换到模拟时钟界面：
 | 系统信息 | `platform.*`, `socket.gethostname()` | `hostname`, `os_platform` |
 | 室外天气 | OpenWeatherMap API（PC 通过 USB JSON，或 MCU HTTP） | `weather_*`（在 stats JSON 中） |
 | SHT3X 温湿度 | PC 从 MQTT `humiture/measurement` 转发（USB‑CDC 模式），或直接 MQTT | `sht3x_*`（在 stats JSON 中） |
-| 锁屏事件 | 进程/dbus 检测 | `pc/event`（独立主题） |
+| 锁屏事件 | 进程/loginctl 检测 | `pc/event`（独立主题） |
 
 #### 📦 自动虚拟环境（Auto-Venv）
 

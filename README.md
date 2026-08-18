@@ -409,7 +409,7 @@ Both scripts collect the same set of metrics (see below). Weather data is bundle
 
 - **Hardware monitoring** — CPU, RAM, disk, GPU, network, battery, swap, disk I/O
 - **Libre Hardware Monitor (LHM) integration** — on Windows, uses `pythonnet` to load `LibreHardwareMonitorLib.dll` for comprehensive sensor data (CPU Package/Core temps, fan speeds, voltages, power draw). Falls back to `nvidia-smi` / `wmic` if LHM is unavailable.
-- **Lock screen detection** — detects Windows (LogonUI.exe) and Linux (dbus logind) lock events and publishes to `pc/event` topic so the MCU can enter standby/clock mode.
+- **Lock screen detection** — detects Windows (LogonUI.exe) and Linux (loginctl) lock events and publishes to `pc/event` topic so the MCU can enter standby/clock mode.
 - **LHM GPU backfill** — fills GPU usage/memory/temperature for non-NVIDIA GPUs (Intel/AMD) from LHM sensor data.
 
 #### 📊 Collected Metrics
@@ -430,7 +430,7 @@ Both scripts collect the same set of metrics (see below). Weather data is bundle
 | System info | `platform.*`, `socket.gethostname()` | `hostname`, `os_platform` |
 | Outdoor weather | OpenWeatherMap API (PC via USB JSON, or MCU HTTP) | `weather_*` (in stats JSON) |
 | SHT3X temperature/humidity | PC‑forwarded from MQTT `humiture/measurement` (USB‑CDC mode), or direct MQTT | `sht3x_*` (in stats JSON) |
-| Lock screen event | Process/dbus check | `pc/event` (separate topic) |
+| Lock screen event | Process/loginctl check | `pc/event` (separate topic) |
 
 #### 📦 Auto-Venv Feature
 
