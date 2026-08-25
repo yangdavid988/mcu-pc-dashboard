@@ -175,108 +175,53 @@ static layout_id_t s_pending_layout = LAYOUT_MAX;
 static theme_id_t  s_pending_theme  = THEME_MAX;
 static bool        g_switching      = false; /* Anti-reentry guard */
 
-/** Opacity animation callback (lv_anim needs (void*, int32_t) signature) */
-static void anim_set_opa_cb(void* obj, int32_t v)
+/** Simple switch: destroy old layout, create new one.
+ *  Background is updated FIRST so the brief flash between
+ *  destroy and create shows the correct theme gradient, not a black screen.
+ *  Canvas (Vortex CPU ring) is handled independently by its own
+ *  particle timer — switch doesn't touch canvas rendering at all. */
+static void start_switch(void)
 {
-    lv_obj_set_style_opa((lv_obj_t*) obj, (lv_opa_t) v, 0);
-}
+    /* 1. Update theme ID (background color/image) BEFORE destroy,
+     *    so the bare screen behind the soon-to-be-destroyed layout
+     *    already shows the correct gradient — no black flash. */
+    if (s_pending_theme < THEME_MAX)
+    {
+        g_theme_id       = s_pending_theme;
+        s_pending_theme  = THEME_MAX;
+    }
+    theme_apply_background();
 
-/** Fade in new container (200ms) */
-static void anim_fade_in(void)
-{
-    lv_obj_t* cont = layout_get_container();
-    if (!cont)
-        return;
-    lv_obj_set_style_opa(cont, LV_OPA_TRANSP, 0);
-    lv_anim_t a;
-    lv_anim_init(&a);
-    lv_anim_set_var(&a, cont);
-    lv_anim_set_exec_cb(&a, anim_set_opa_cb);
-    lv_anim_set_values(&a, LV_OPA_TRANSP, LV_OPA_COVER);
-    lv_anim_set_duration(&a, 200);
-    lv_anim_start(&a);
-}
+    /* 2. Destroy old layout — g_layout_id is STILL the old value,
+     *    so destroy_current_layout() correctly finds and frees
+     *    g_layout_containers[old_id] including its particle timer. */
+    destroy_current_layout();
 
-/** Fade-out complete callback: perform actual switch, then fade in new layout */
-static void switch_ready_cb(lv_anim_t* a)
-{
-    (void) a;
-    g_switching = false;
-
+    /* 3. NOW adopt the new layout ID (must happen AFTER destroy) */
     if (s_pending_layout < LAYOUT_MAX)
     {
-        layout_id_t new_lo = s_pending_layout;
-        s_pending_layout   = LAYOUT_MAX;
-
-        destroy_current_layout();
-        g_layout_id = new_lo;
-        theme_apply_background();
-        switch (g_layout_id)
-        {
-            case LAYOUT_TRIAD:
-                create_layout_triad(lv_scr_act());
-                break;
-            case LAYOUT_VORTEX:
-                create_layout_vortex(lv_scr_act());
-                break;
-            case LAYOUT_PULSE:
-                create_layout_pulse(lv_scr_act());
-                break;
-            default:
-                break;
-        }
-        /* Set new container transparent immediately to prevent rendering one frame before fade-in */
-        lv_obj_set_style_opa(layout_get_container(), LV_OPA_TRANSP, 0);
-        theme_watermark_update();
-        notify_layout_switched();
-        if (layout_is_created())
-            update_current_layout();
+        g_layout_id      = s_pending_layout;
+        s_pending_layout = LAYOUT_MAX;
     }
-    else if (s_pending_theme < THEME_MAX)
+
+    /* 4. Create new layout */
+    switch (g_layout_id)
     {
-        theme_id_t new_th = s_pending_theme;
-        s_pending_theme   = THEME_MAX;
-
-        destroy_current_layout();
-        g_theme_id = new_th;
-        theme_apply_background();
-        switch (g_layout_id)
-        {
-            case LAYOUT_TRIAD:
-                create_layout_triad(lv_scr_act());
-                break;
-            case LAYOUT_VORTEX:
-                create_layout_vortex(lv_scr_act());
-                break;
-            case LAYOUT_PULSE:
-                create_layout_pulse(lv_scr_act());
-                break;
-            default:
-                break;
-        }
-        lv_obj_set_style_opa(layout_get_container(), LV_OPA_TRANSP, 0);
-        theme_watermark_update();
-        notify_layout_switched();
-        if (layout_is_created())
-            update_current_layout();
+        case LAYOUT_TRIAD:
+            create_layout_triad(lv_scr_act());
+            break;
+        case LAYOUT_VORTEX:
+            create_layout_vortex(lv_scr_act());
+            break;
+        case LAYOUT_PULSE:
+            create_layout_pulse(lv_scr_act());
+            break;
+        default:
+            break;
     }
-    anim_fade_in();
-}
-
-/** Start switch: immediately hide old container (eliminate single-frame flash), switch + fade in */
-static void start_fade_out(void)
-{
-    lv_obj_t* old = layout_get_container();
-    if (!old)
-    {
-        switch_ready_cb(NULL);
-        return;
-    }
-
-    /* Immediately hide old container — LVGL won't render it next frame */
-    lv_obj_set_style_opa(old, LV_OPA_TRANSP, 0);
-    /* Switch directly (old screen already hidden, no flicker) */
-    switch_ready_cb(NULL);
+    theme_watermark_update();
+    notify_layout_switched();
+    g_switching = false;
 }
 
 void theme_watermark_show(bool show)
@@ -299,7 +244,7 @@ void layout_switch(layout_id_t layout)
     s_pending_layout = layout;
     s_pending_theme  = THEME_MAX;
     RTK_LOGI(TAG, "layout_switch -> %s\n", layout_get_name(layout));
-    start_fade_out();
+    start_switch();
 }
 
 void theme_switch(theme_id_t theme)
@@ -310,5 +255,5 @@ void theme_switch(theme_id_t theme)
     s_pending_theme  = theme;
     s_pending_layout = LAYOUT_MAX;
     RTK_LOGI(TAG, "theme_switch -> %s\n", theme_get_name(theme));
-    start_fade_out();
+    start_switch();
 }

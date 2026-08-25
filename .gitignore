@@ -14,6 +14,7 @@ build_*/
 .cache
 .venv
 .bb_config
+_env_ps.bat
 
 # ignore submodules end
 

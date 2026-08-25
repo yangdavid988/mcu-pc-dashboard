@@ -1,8 +1,9 @@
 /* ========================================================================
  * USB CDC ACM receiver — PC stats via USB virtual serial port
  *
- * Guard: only compiled when CONFIG_USB_CDC_MODE is defined (ST7262 only).
- * DBL070 is excluded via Kconfig dependency (depends on SCREEN_ST7262).
+ * Guard: only compiled when CONFIG_USB_CDC_MODE is defined
+ * (ST7262 or T1720A — both have USB pins).
+ * DBL070 is excluded via Kconfig dependency.
  *
  * NOTE: platform_autoconf.h must be included BEFORE the #ifdef guard
  * to break the circular dependency: the header provides CONFIG_USB_CDC_MODE

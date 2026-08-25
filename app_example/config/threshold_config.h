@@ -58,6 +58,8 @@ typedef struct
 #define BRIGHTNESS_STANDBY_PCT 20   /* cubic: 20% → 0.8% duty → dimly visible */
 #elif defined(CONFIG_SCREEN_ST7262)
 #define BRIGHTNESS_STANDBY_PCT 3    /* quadratic: 3% → 0.09% duty */
+#elif defined(CONFIG_SCREEN_T1720A)
+#define BRIGHTNESS_STANDBY_PCT 2    /* quadratic: 2% → 0.04% duty → barely visible */
 #endif
 
 /** Normal brightness (0..100).  100 = full brightness in monitor UI */
@@ -68,6 +70,8 @@ typedef struct
 #define BL_MIN_PCT  10
 #elif defined(CONFIG_SCREEN_ST7262)
 #define BL_MIN_PCT  5
+#elif defined(CONFIG_SCREEN_T1720A)
+#define BL_MIN_PCT  2
 #endif
 
 /** Step size (%) for backlight_adjust(+/-) */

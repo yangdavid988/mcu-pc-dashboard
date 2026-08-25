@@ -21,6 +21,7 @@ FILE_MAP = {
     "bg_inferno_128.png":        ("bg_inferno",  "bg_inferno_bitmap"),
     "mcu.png":                   ("bg_silicon", "bg_silicon_bitmap"),
     "clock432.png":             ("clock432",    "clock432_bitmap"),
+    "clock400.png":             ("clock400",    "clock400_bitmap"),
 }
 
 

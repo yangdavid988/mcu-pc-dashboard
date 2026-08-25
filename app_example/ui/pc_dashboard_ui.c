@@ -370,18 +370,20 @@ void dashboard_timer_cb(lv_timer_t* timer)
         return;
     }
 
-    /* Transition: CLOCK → MONITOR (fade-out transition) */
+    /* Transition: CLOCK → MONITOR (fade-in monitor layout) */
     if (g_screen_state == SCREEN_STATE_MONITOR && g_lock_screen_active)
     {
-        RTK_LOGI("V3_UI", "unlock event -> fade transition to monitor\n");
-        /* First create the monitor layout BEHIND the clock UI */
+        RTK_LOGI("V3_UI", "unlock event -> fade-in monitor\n");
+        /* Create monitor layout on scr_act() — lands ABOVE the clock
+         * container (LVGL z-order: newer siblings on top). Then fade
+         * the monitor in from TRANSP→COVER so the clock beneath
+         * appears to dissolve away. No move_foreground needed. */
         reset_mqtt_status_tracking();
         g_data_last_tick    = rtos_time_get_current_system_time_ms();
         g_timeout_triggered = false;
         notify_layout_switched();
         destroy_waiting_ui();
         layout_switch(g_layout_id);
-        /* Then fade the clock out (async — ready_cb destroys clock widgets) */
         start_unlock_transition();
         return;
     }
