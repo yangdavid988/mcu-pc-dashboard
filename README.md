@@ -19,11 +19,16 @@
 [![Last Commit](https://badgen.net/github/last-commit/yangdavid988/mcu-pc-dashboard)](https://github.com/yangdavid988/mcu-pc-dashboard)
 [![Status](https://img.shields.io/badge/status-updating-yellow)]()
 
-🚀 A PC hardware resource monitor that receives real-time system status (CPU, GPU, RAM, disk, network) from a Windows PC via **USB CDC ACM virtual serial port** or **MQTT topics** (`pc/stats`, `pc/event`, `pc/weather`), plus environmental data via MQTT (`humiture/measurement`) and outdoor weather via HTTP. Parses JSON on the **Ameba RTL8721F** microcontroller and drives an **ST7262 TFT** (default, 800×480) or **DBL070 TFT** (opt-in) color screen via **LVGL 9.3** with a real-time dashboard.
+🚀 A PC hardware resource monitor that receives real-time system status (CPU, GPU, RAM, disk, network) from a Windows PC via **USB CDC ACM virtual serial port** or **MQTT topics** (`pc/stats`, `pc/event`, `pc/weather`), plus environmental data via MQTT (`humiture/measurement`) and outdoor weather via HTTP. Parses JSON on the **Ameba RTL8721F** microcontroller and drives an **800×480 TFT** color screen via **LVGL 9.3** with a real-time dashboard.
+
+Three display modules supported:
+- **ST7262** (RGB565 parallel, default) — has USB pins, supports USB CDC mode
+- **DBL070** (RGB565 parallel) — no USB pins, MQTT mode only
+- **T1720A** (RGB888 parallel + GT911 capacitive touch) — has USB pins, **touch-only interaction** (no physical buttons)
 
 Two mutually exclusive data paths, selected at compile time:
-- **USB CDC mode** (`CONFIG_USB_CDC_MODE`) — **ST7262 only**. All data arrives via USB cable (CPU/RAM/DISK/GPU/NET/Battery and more). **No WiFi needed on MCU — zero configuration**. Optionally, the PC can forward SHT3X sensor data from MQTT.
-- **MQTT mode** (no define) — DBL070 or ST7262 without USB. WiFi + MQTT for all data, weather via MCU HTTP.
+- **USB CDC mode** (`CONFIG_USB_CDC_MODE`) — **ST7262 and T1720A**. All data arrives via USB cable (CPU/RAM/DISK/GPU/NET/Battery and more). **No WiFi needed on MCU — zero configuration**. Optionally, the PC can forward SHT3X sensor data from MQTT.
+- **MQTT mode** (no define) — DBL070, ST7262 or T1720A. WiFi + MQTT for all data, weather via MCU HTTP.
 
 - 📄 [Chip & module info](https://aiot.realmcu.com/en/home.html) | 🌿 [Gitee mirror](https://gitee.com/yangdavid988/mcu-pc-dashboard)
 
@@ -68,9 +73,9 @@ Two mutually exclusive data paths, selected at compile time:
 
 ### ✨ Features
 
-- ✅ **USB CDC ACM** — primary data path on ST7262. All data arrives over USB cable (stats, weather, SHT3X forwarded by PC, lock events). No WiFi needed on MCU.
-- ✅ **MQTT subscribe (fallback)** — for DBL070 or ST7262 without USB cable. Connects via TLS 8883, subscribes to `pc/stats`, `humiture/measurement`, `pc/event`, and `pc/weather`.
-- ✅ **Dashboard on ST7262 (default) or DBL070 (opt-in) TFT** — 800×480, via LVGL 9.3 with dual-buffer + VBlank page flip (tear-free).
+- ✅ **USB CDC ACM** — primary data path on ST7262 and T1720A. All data arrives over USB cable (stats, weather, SHT3X forwarded by PC, lock events). No WiFi needed on MCU.
+- ✅ **MQTT subscribe (fallback)** — for DBL070, ST7262 or T1720A. Connects via TLS 8883, subscribes to `pc/stats`, `humiture/measurement`, `pc/event`, and `pc/weather`.
+- ✅ **Dashboard on ST7262 / DBL070 / T1720A TFT** — 800×480, selected via `ameba.py menuconfig`. LVGL 9.3 with dual-buffer + VBlank page flip (tear-free).
 - ✅ **CPU / Memory / Disk** — color-coded progress bars with configurable threshold flash warnings.
 - ✅ **GPU monitoring** — usage %, memory, temperature, and GPU model name.
 - ✅ **Network** — upload/download speed (KB/s) with arrow icons.
@@ -84,8 +89,8 @@ Two mutually exclusive data paths, selected at compile time:
 - ✅ **Disk I/O** — total read/write bytes and I/O utilization percentage.
 - ✅ **Wi-Fi auto-connect** with configurable retry and automatic reconnection on disconnect.
 - ✅ **MQTT TLS encrypted connection**.
-- ✅ **3 dashboard layouts** — switch via GPIO button (circular: TRIAD → VORTEX → PULSE).
-- ✅ **3 color themes** — switch via GPIO button (COBALT blue / INFERNO red / SILICON silver).
+- ✅ **3 dashboard layouts** — ST7262/DBL070 via GPIO buttons; T1720A via touch swipe gestures (left/right).
+- ✅ **3 color themes** — ST7262/DBL070 via GPIO buttons; T1720A via **double tap** (COBALT blue / INFERNO red / SILICON silver).
 - ✅ **Fade transition animation** — smooth 200ms opacity crossfade on layout/theme switch.
 - ✅ **Standby mode** — analogue clock display when PC is locked, with sweep hand animation on time acquisition. Standby Manager orchestrates MQTT-to-LVGL task transition. Auto-dims backlight in standby.
 - ✅ **PWM backlight control** — GPIO buttons for brightness adjustment (short press ±10%, long press jumps to min/max). OSD popup shows current percentage. Auto-dims to 20% in standby.
@@ -102,7 +107,7 @@ Two mutually exclusive data paths, selected at compile time:
 | **Power consumption** | Higher (WiFi radio active) | **Lower** (WiFi disabled) |
 | **Firmware size** | Larger (~20–35 KB bigger) | **Smaller** (WiFi/MQTT excluded) |
 | **Data collection** | Shared: MCU & PC | **All on PC** (psutil / weather / MQTT relay) |
-| **Target screen** | ST7262 + DBL070 | **ST7262 only** (has USB pins) |
+| **Target screen** | ST7262 + DBL070 + T1720A | **ST7262 + T1720A** (has USB pins) |
 
 **USB CDC data flow (default):**
 
@@ -113,7 +118,7 @@ flowchart LR
     end
 
     subgraph MCU_USB["⚙ Ameba RTL8721F"]
-        USB_RX["USB CDC ACM Rx\nZero-config · No WiFi\nST7262 only"]
+        USB_RX["USB CDC ACM Rx\nZero-config · No WiFi\nST7262 / T1720A"]
         JSON_USB["JSON dispatch\n→ g_pc_stats"]
         UI_USB["📊 LVGL Dashboard\n3 layouts · 3 themes\nStandby · Backlight · Alerts"]
     end
@@ -131,12 +136,12 @@ flowchart LR
         HW_MQTT["pc_to_emqx.py\npsutil → hardware stats\nOpenWeatherMap → weather\nLock detection → events"]
     end
 
-    subgraph Broker["☁ MQTT Broker\nTLS 8883"]
+    subgraph Broker["☁ MQTT Broker · TLS 8883"]
         TOPICS["pc/stats\npc/event\nhumiture/measurement\npc/weather"]
     end
 
     subgraph MCU_MQTT["⚙ Ameba RTL8721F"]
-        MQTT_RX["WiFi + MQTT client\nTLS · Broker needed\nST7262 / DBL070"]
+        MQTT_RX["WiFi + MQTT client\nTLS · Broker needed\nST7262 / DBL070 / T1720A"]
         JSON_MQTT["JSON dispatch\n→ g_pc_stats"]
         UI_MQTT["📊 LVGL Dashboard\n3 layouts · 3 themes\nStandby · Backlight · Alerts"]
     end
@@ -152,41 +157,53 @@ flowchart LR
 ```
 .
 ├── app_example/
-│   ├── CMakeLists.txt          # Build configuration
+│   ├── CMakeLists.txt                       # Build configuration
 │   ├── main/
-│   │   └── app_main.c          # Entry point, thread creation
-│   ├── core/                   # Core business logic
-│   │   ├── pc_dashboard.c/h    # MQTT client, JSON parsing, PC_Stats_t
-│   │   ├── standby_manager.c/h # Standby entry/exit orchestration
-│   │   ├── weather.c/h         # Weather data (HTTP fetch or MQTT push)
-│   │   ├── usb_cdc_receiver.c/h# USB CDC ACM receiver (PC stats via cable)
-│   │   └── wifi_reconnect.c/h  # Wi-Fi auto-connect with retry
-│   ├── ui/                     # UI presentation layer
-│   │   ├── pc_dashboard_ui.c/h     # UI lifecycle, timer callbacks
-│   │   ├── pc_dashboard_layout.c/h # V3 layout system (TRIAD/VORTEX/PULSE)
-│   │   ├── pc_dashboard_theme.c/h  # Color themes (COBALT/INFERNO/SILICON)
-│   │   └── pc_dashboard_lock_screen.c/h  # Lock screen clock
-│   ├── hal/                    # Hardware abstraction layer
-│   │   ├── backlight_ctrl.c/h  # PWM backlight control
-│   │   ├── gpio_control.c/h    # GPIO button ISR → deferred switch
-│   │   ├── lcd/                # LCD drivers (ST7262, DBL070, LCDC core)
-│   │   └── usb/                # USB CDC ACM custom descriptor (PID override)
-│   ├── config/                 # Configuration headers
-│   │   ├── threshold_config.h  # Central config: thresholds, timeouts, brightness, retry
-│   │   ├── lv_conf_project.h   # LVGL configuration override
-│   │   ├── sdk_compat.h        # SDK version compatibility
-│   │   └── suppress_mqtt_log.h # MQTT log suppression
-│   ├── assets/                 # Image/icon resources
-│   │   ├── icons/              # 22 LVGL icon assets (C arrays)
-│   │   └── backgrounds/        # 3 theme background images + clock
-│   └── scripts_tools/          # PNG→LVGL conversion scripts
-├── PC/                         # PC-side Python collector
-├── env.sh                      # Linux/macOS environment setup
-├── env.ps1                     # Windows PowerShell environment setup
-├── env.bat                     # Windows cmd environment setup
-├── CMakeLists.txt              # Top-level CMake
-├── prj.conf                    # SDK Kconfig
-└── Kconfig                     # SDK config reference
+│   │   └── app_main.c                       # Entry point, thread creation
+│   ├── core/                                # Core business logic
+│   │   ├── pc_dashboard.c/h                 # MQTT client, JSON parsing, PC_Stats_t
+│   │   ├── standby_manager.c/h              # Standby entry/exit orchestration
+│   │   ├── weather.c/h                      # Weather data (HTTP fetch or MQTT push)
+│   │   ├── usb_cdc_receiver.c/h             # USB CDC ACM receiver (PC stats via cable)
+│   │   └── wifi_reconnect.c/h               # Wi-Fi auto-connect with retry
+│   ├── ui/                                  # UI presentation layer
+│   │   ├── pc_dashboard_ui.c/h              # UI lifecycle, timer callbacks
+│   │   ├── pc_dashboard_layout.h            # Layout system header (global decls)
+│   │   ├── pc_dashboard_layout_base.c       # Shared lib + dispatch + weather UI
+│   │   ├── pc_dashboard_layout_triad.c      # TRIAD layout create/update
+│   │   ├── pc_dashboard_layout_vortex.c     # VORTEX layout create/update
+│   │   ├── pc_dashboard_layout_pulse.c      # PULSE layout create/update
+│   │   ├── pc_dashboard_theme.c/h           # Color themes (COBALT/INFERNO/SILICON)
+│   │   └── pc_dashboard_lock_screen.c/h     # Lock screen clock
+│   ├── hal/                                 # Hardware abstraction layer
+│   │   ├── backlight_ctrl.c/h               # PWM backlight control
+│   │   ├── gpio_control.c/h                 # GPIO button ISR → deferred switch
+│   │   ├── lcd/                             # LCD drivers (ST7262, DBL070, T1720A, LCDC core)
+│   │   │   ├── lcdc_core.c/h
+│   │   │   ├── lcd_drv.c
+│   │   │   ├── st7262_cfg.c/h
+│   │   │   ├── dbl070_cfg.c/h
+│   │   │   └── t1720a_cfg.c/h
+│   │   ├── touch/                           # Touch driver (T1720A only)
+│   │   │   ├── touch_gt911.c/h             # GT911 I2C touch controller
+│   │   │   └── touch_gesture.c/h           # Swipe gestures → layout/theme/brightness
+│   │   └── usb/                             # USB CDC ACM custom descriptor (PID override)
+│   ├── config/                              # Configuration headers
+│   │   ├── threshold_config.h               # Central config: thresholds, timeouts, brightness, retry
+│   │   ├── lv_conf_project.h                # LVGL configuration override
+│   │   ├── sdk_compat.h                     # SDK version compatibility
+│   │   └── suppress_mqtt_log.h              # MQTT log suppression
+│   ├── assets/                              # Image/icon resources
+│   │   ├── icons/                           # 22 LVGL icon assets (C arrays)
+│   │   └── backgrounds/                     # 3 theme background images + clock
+│   └── scripts_tools/                       # PNG→LVGL conversion scripts
+├── PC/                                      # PC-side Python collector
+├── env.sh                                   # Linux/macOS environment setup
+├── env.ps1                                  # Windows PowerShell environment setup
+├── env.bat                                  # Windows cmd environment setup
+├── CMakeLists.txt                           # Top-level CMake
+├── prj.conf                                 # SDK Kconfig
+└── Kconfig                                  # SDK config reference
 ```
 ---
 
@@ -194,7 +211,10 @@ flowchart LR
 
 1️⃣ **Required Components**
 
-- RTL8721F EVB (with ST7262 RGB LCD module)
+- RTL8721F EVB (with optional LCD module per screen selection)
+  - **ST7262 RGB LCD module** (default) — GPIO physical buttons
+  - **DBL070 RGB LCD module** — GPIO physical buttons
+  - **T1720A RGB LCD module** (with GT911 capacitive touch) — **touch-only interaction**
   - USB CDC mode: no Wi-Fi antenna needed
   - MQTT mode: Wi-Fi antenna required
 - MQTT Broker with TLS port 8883 (e.g. EMQX Cloud) — **MQTT mode only**, not needed for USB CDC
@@ -203,18 +223,23 @@ flowchart LR
 
 2️⃣ **LCD Options**
 
-The project supports two LCD modules:
+The project supports three LCD modules:
 
-| Module | Resolution | Interface | Driver File | How to Enable | USB CDC |
-|--------|-----------|-----------|-------------|---------------|---------|
-| **ST7262** (default) | 800×480 | RGB-565 parallel | `app_example/hal/lcd/st7262_cfg.c` | Default, no action needed | ✅ Supported |
-| **DBL070** | 800×480 | RGB-565 parallel | `app_example/hal/lcd/dbl070_cfg.c` | Set `CONFIG_SCREEN_DBL070=y` in prj.conf or via `ameba.py menuconfig` | ❌ No USB pins |
+| Module | Resolution | Interface | Driver File | How to Enable | USB CDC | Interaction |
+|--------|-----------|-----------|-------------|---------------|---------|------------|
+| **ST7262** (default) | 800×480 | RGB-565 parallel | `app_example/hal/lcd/st7262_cfg.c` | Default, no action needed | ✅ Supported | GPIO physical buttons |
+| **DBL070** | 800×480 | RGB-565 parallel | `app_example/hal/lcd/dbl070_cfg.c` | Set `CONFIG_SCREEN_DBL070=y` in prj.conf or via `ameba.py menuconfig` | ❌ No USB pins | GPIO physical buttons |
+| **T1720A** | 800×480 | RGB-888 parallel 24-bit | `app_example/hal/lcd/t1720a_cfg.c` | Set `CONFIG_SCREEN_T1720A=y` in prj.conf or via `ameba.py menuconfig` | ✅ Supported | **Touch gestures** (GT911 capacitive, no physical buttons) |
 
-Pin configurations are in `app_example/hal/lcd/st7262_cfg.c` and `dbl070_cfg.c`.
+Pin configurations are in `app_example/hal/lcd/st7262_cfg.c`, `dbl070_cfg.c`, and `t1720a_cfg.c`.
 
 > ⚠️ The `CONFIG_SCREEN_DBL070` flag (set in Kconfig) adjusts the framebuffer base address and LCDC timing parameters for the DBL070 module. Both drivers are compiled in; the flag selects which one is active at runtime.
 
-3️⃣ **GPIO Button Mapping**
+3️⃣ **Interaction**
+
+> T1720A uses capacitive touch gestures instead of physical buttons; ST7262/DBL070 use GPIO buttons.
+
+**GPIO Button Mapping (ST7262 / DBL070)**
 
 | Action | ST7262 Pin | DBL070 Pin | Behavior |
 |--------|-----------|------------|----------|
@@ -224,6 +249,18 @@ Pin configurations are in `app_example/hal/lcd/st7262_cfg.c` and `dbl070_cfg.c`.
 | Brightness ↓ | PA_27 | PB_17 | Short press: -10%, Long press (≥2s): jump to 10% |
 
 Pull-up/down configured automatically. Interrupt-based with 250ms hardware debounce. Layout/theme buttons are disabled in standby mode; brightness control remains active.
+
+**Touch Gesture Mapping (T1720A — GT911 capacitive touch)**
+
+| Gesture | Action | Scope |
+|---------|--------|-------|
+| ← Swipe LEFT | Next layout (TRIAD → VORTEX → PULSE) | Monitor mode |
+| → Swipe RIGHT | Previous layout | Monitor mode |
+| ↑ Swipe UP | Brightness +10% (with OSD popup) | All modes |
+| ↓ Swipe DOWN | Brightness -10% (with OSD popup) | All modes |
+| Double tap | Next theme (COBALT → INFERNO → SILICON) | Monitor mode |
+
+Gestures are detected by LVGL native `LV_EVENT_GESTURE`; double-tap uses manual timing + distance threshold.
 
 ---
 
@@ -272,8 +309,8 @@ python ameba.py build
 3️⃣ **Configure Parameters** — see [Configuration Reference](#configuration-reference) below
 
 **Mode selection (Kconfig):**
-- **USB CDC mode** (default for ST7262) — set `CONFIG_USB_CDC_MODE=y` in `prj.conf` or enable via `ameba.py menuconfig`. No WiFi credentials needed.
-- **MQTT mode** — set `CONFIG_USB_CDC_MODE=n` (or `# CONFIG_USB_CDC_MODE is not set`) in `prj.conf`. Switch display in `ameba.py menuconfig` if needed.
+- **USB CDC mode** (default for ST7262/T1720A) — set `CONFIG_USB_CDC_MODE=y` in `prj.conf` or enable via `ameba.py menuconfig`. No WiFi credentials needed.
+- **MQTT mode** — set `CONFIG_USB_CDC_MODE=n` (or `# CONFIG_USB_CDC_MODE is not set`) in `prj.conf`. Switch display (ST7262 / DBL070 / T1720A) in `ameba.py menuconfig` if needed.
 
 Common configs:
 - MQTT credentials → `pc_dashboard.h` (only needed for MQTT mode or PC-side SHT3X forwarding)
@@ -369,7 +406,9 @@ When the PC is locked, the dashboard switches to an analogue clock display:
 
 - **Sweep hand animation** — On first valid time acquisition, the second/minute/hour hands sweep smoothly from 12 o'clock to the current position at staggered speeds (sec: 1s, min: 1.5s, hour: 2s)
 - **Date window** — Positioned at 3 o'clock, shows day-of-month and weekday abbreviation, updates automatically at midnight
-- **Non-square pixel compensation** — DBL070 pixel ratio is 1.078:1; the clock face image is pre-compensated to 400×432 for a physically circular appearance
+- **Non-square pixel compensation**:
+  - **DBL070** — pixel ratio 1.078:1; clock face pre-compensated to 400×432 for physically circular appearance
+  - **T1720A** — pixel ratio 0.333:1 (0.0635mm H × 0.1905mm V); uses native 400×400 circular source, no compensation needed; hand lengths no longer extra-scaled
 - **1 Hz precise refresh** — Hands update every second, redrawing only the hand bounding box (not the full screen), synchronized with VBlank to avoid tearing
 - **SNTP fallback** — If MQTT hasn't delivered a timestamp yet, SNTP is used as a fallback time source
 
@@ -380,10 +419,14 @@ When the PC is locked, the dashboard switches to an analogue clock display:
 TIM4 hardware PWM drives the backlight MOSFET, supporting 0%–100% continuous adjustment:
 
 - **GPIO button control** — BL_UP / BL_DOWN buttons: short press steps by 10%, long press (≥2s) jumps to extremes (100% / 10%)
+- **Touch gesture control (T1720A)** — Swipe UP/DOWN for ±10% brightness (equivalent to physical buttons)
 - **OSD popup** — Brightness changes trigger an OSD at the bottom-center of the screen (auto-fades after 1.5s), showing the current percentage and a progress bar
-- **Standby dimming** — Automatically dims to `BRIGHTNESS_STANDBY_PCT` (default 20%) in standby, restores on unlock
-- **Gamma correction** — Cubic brightness curve (gamma ≈ 3.0) maps the sensitive low-PWM region to more user steps, giving perceptually linear control
-- **Standby button policy** — Layout/theme GPIO interrupts are hardware-disabled; only brightness control remains active
+- **Standby dimming** — Automatically dims to `BRIGHTNESS_STANDBY_PCT` (ST7262/DBL070: 20%, T1720A: 3%) in standby, restores on unlock
+- **Gamma correction**:
+  - ST7262/DBL070 — Cubic curve (gamma ≈ 3.0), compensates low-PWM region
+  - **T1720A** — **Quadratic curve** (no MOSFET saturation), `duty = (user_pct / 100)²`
+  - T1720A `BL_MIN_PCT=2`
+- **Standby button policy** — ST7262/DBL070 layout/theme GPIO interrupts are hardware-disabled; T1720A layout/theme touch gestures are also disabled in standby. Brightness control remains active.
 
 #### ⚠️ Threshold Alert System
 
@@ -505,7 +548,7 @@ Edit `app_example/core/pc_dashboard.h`:
 
 ```c
 #define MQTT_BROKER_ADDRESS     "your-broker.emqxsl.cn"
-#define MQTT_CLIENT_ID          "PC_DASHBOARD_MCU_1_COM19"  /* auto-selected by CONFIG_SCREEN_DBL070 flag */
+#define MQTT_CLIENT_ID          "PC_DASHBOARD_MCU_1_COM19"  /* auto-selected by CONFIG_SCREEN_T1720A flag */
 #define MQTT_USERNAME           "your-username"
 #define MQTT_PASSWORD           "your-password"
 ```
@@ -540,8 +583,9 @@ Edit `app_example/config/threshold_config.h`:
 | `UI_UPDATE_INTERVAL_MS` | 1000ms | LVGL timer interval |
 | `RETRY_LIMIT` | 10 | WiFi max reconnect attempts |
 | `RETRY_INTERVAL` | 5000ms | WiFi retry delay |
-| `BL_MIN_PCT` | 10% | Backlight hardware floor |
+| `BL_MIN_PCT` | ST7262/DBL070: 10%, T1720A: 2% | Backlight hardware floor |
 | `BL_STEP_PCT` | 10% | Backlight step size |
+| `BRIGHTNESS_STANDBY_PCT` | ST7262/DBL070: 20%, T1720A: 3% | Standby backlight brightness |
 
 #### 📁 Other Configuration
 

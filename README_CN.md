@@ -21,10 +21,15 @@
 
 🚀 基于 **Ameba RTL8721F** MCU 的 PC 硬件资源实时监控器。通过 **USB CDC ACM 虚拟串口** 或 **MQTT 主题** 接收 PC 实时状态（CPU、GPU、内存、磁盘、网络），同时获取 SHT3X 温湿度和室外天气数据。在 **800×480 TFT** 屏幕上实时展示，UI 由 **LVGL 9.3** 驱动。
 
+支持三种屏幕模块：
+- **ST7262**（RGB565 并行，默认）— 有 USB 引脚，支持 USB CDC 模式
+- **DBL070**（RGB565 并行）— 无 USB 引脚，仅 MQTT 模式
+- **T1720A**（RGB888 并行 + GT911 电容触摸）— 有 USB 引脚，**纯触摸交互**（无物理按键）
+
 两种数据路径，编译时选择(具体参考双架构数据流程图)：
-- **USB CDC 模式**（`CONFIG_USB_CDC_MODE`）— **仅 ST7262**。所有数据通过 USB 线缆传输（CPU/RAM/磁盘/GPU/网络/电池等 PC 状态）。**MCU 不需要 WiFi，零配置开箱即用**。
+- **USB CDC 模式**（`CONFIG_USB_CDC_MODE`）— **ST7262 和 T1720A**。所有数据通过 USB 线缆传输（CPU/RAM/磁盘/GPU/网络/电池等 PC 状态）。**MCU 不需要 WiFi，零配置开箱即用**。
 可选：PC 通过 MQTT 转发 SHT3X 温湿度数据。
-- **MQTT 模式** — DBL070 或 ST7262。WiFi + MQTT 获取全部数据。
+- **MQTT 模式** — DBL070、ST7262 或 T1720A。WiFi + MQTT 获取全部数据。
 ---
 
 - 📄 [芯片与模块信息](https://aiot.realmcu.com/cn/home.html) | 🌿 [Gitee 镜像](https://gitee.com/yangdavid988/mcu-pc-dashboard)
@@ -70,9 +75,9 @@
 
 ### ✨ 功能特点
 
-- ✅ **USB CDC ACM** — ST7262 上的主数据通路。全部数据通过 USB 线缆传输（PC 状态、天气、PC 转发的 SHT3X、锁屏事件）。MCU 不需要 WiFi。
-- ✅ **MQTT 订阅（备用）** — DBL070 或无 USB 的 ST7262 使用。通过 TLS 8883 加密连接，订阅 `pc/stats`、`humiture/measurement`、`pc/event`、`pc/weather` 主题。
-- ✅ **ST7262（默认）或 DBL070（可选）TFT 仪表盘** — 800×480，基于 LVGL 9.3，双缓冲 + VBlank 页翻转（无撕裂）。
+- ✅ **USB CDC ACM** — ST7262 和 T1720A 上的主数据通路。全部数据通过 USB 线缆传输（PC 状态、天气、PC 转发的 SHT3X、锁屏事件）。MCU 不需要 WiFi。
+- ✅ **MQTT 订阅（备用）** — DBL070、ST7262 或 T1720A 使用。通过 TLS 8883 加密连接，订阅 `pc/stats`、`humiture/measurement`、`pc/event`、`pc/weather` 主题。
+- ✅ **ST7262 / DBL070 / T1720A TFT 仪表盘** — 800×480，通过 `ameba.py menuconfig` 选择。基于 LVGL 9.3，双缓冲 + VBlank 页翻转（无撕裂）。
 - ✅ **CPU / 内存 / 磁盘** — 彩色进度条，支持可配置阈值闪烁告警。
 - ✅ **GPU 监控** — 使用率、显存、温度及 GPU 型号名称。
 - ✅ **网络** — 上传/下载速度（KB/s），带箭头图标。
@@ -86,8 +91,8 @@
 - ✅ **磁盘 I/O** — 总读取/写入字节数及 I/O 利用率百分比。
 - ✅ **WiFi 自动连接** — 支持可配置重试次数，断线自动重连。
 - ✅ **MQTT TLS 加密连接**。
-- ✅ **3 种仪表盘布局** — 通过 GPIO 按键循环切换（TRIAD → VORTEX → PULSE）。
-- ✅ **3 种颜色主题** — 通过 GPIO 按键循环切换（COBALT 蓝色 / INFERNO 红色 / SILICON 银色）。
+- ✅ **3 种仪表盘布局** — ST7262/DBL070 通过 GPIO 按键循环切换；T1720A 通过触摸滑动手势循环切换（左滑/右滑）。
+- ✅ **3 种颜色主题** — ST7262/DBL070 通过 GPIO 按键循环切换；T1720A 通过**双击**循环切换（COBALT 蓝色 / INFERNO 红色 / SILICON 银色）。
 - ✅ **淡入淡出动画** — 布局/主题切换时 200ms 透明度过渡。
 - ✅ **待机模式** — PC 锁屏时自动切换为模拟时钟，Sweep 指针扫入动画，待机自动降低亮度；解锁后淡出恢复监控面板。Standby Manager 集中协调 MQTT 任务与 LVGL UI 任务的切换时序。
 - ✅ **PWM 背光控制** — 通过 GPIO 按键调节亮度（短按步进 10%，长按跳至极值），待机自动降至 20%，OSD 弹窗实时显示百分比。
@@ -104,7 +109,7 @@
 | **功耗** | 较高（WiFi 射频开启） | **更低**（WiFi 关闭） |
 | **固件体积** | 较大（大约 20–35 KB） | **更小**（WiFi/MQTT 排除） |
 | **数据采集** | MCU 与 PC 共同分担 | **全部在 PC 端**（psutil/天气/MQTT 中继） |
-| **适用屏幕** | ST7262 + DBL070 | **仅 ST7262**（有 USB 引脚） |
+| **适用屏幕** | ST7262 + DBL070 + T1720A | **ST7262 + T1720A**（有 USB 引脚） |
 
 **USB CDC 模式数据流：**
 
@@ -115,7 +120,7 @@ flowchart LR
     end
 
     subgraph MCU_USB["⚙ Ameba RTL8721F"]
-        USB_RX["USB CDC ACM 接收\n零配置 · 无 WiFi\n仅 ST7262"]
+        USB_RX["USB CDC ACM 接收\n零配置 · 无 WiFi\nST7262 / T1720A"]
         JSON_USB["JSON 解析\n→ g_pc_stats"]
         UI_USB["📊 LVGL 仪表盘\n3 布局 · 3 主题\n待机 · 背光 · 告警"]
     end
@@ -138,7 +143,7 @@ flowchart LR
     end
 
     subgraph MCU_MQTT["⚙ Ameba RTL8721F"]
-        MQTT_RX["WiFi + MQTT 客户端\nTLS · 需 Broker\nST7262 / DBL070"]
+        MQTT_RX["WiFi + MQTT 客户端\nTLS · 需 Broker\nST7262 / DBL070 / T1720A"]
         JSON_MQTT["JSON 解析\n→ g_pc_stats"]
         UI_MQTT["📊 LVGL 仪表盘\n3 布局 · 3 主题\n待机 · 背光 · 告警"]
     end
@@ -154,41 +159,53 @@ flowchart LR
 ```
 .
 ├── app_example/
-│   ├── CMakeLists.txt          # 构建配置
+│   ├── CMakeLists.txt                       # 构建配置
 │   ├── main/
-│   │   └── app_main.c          # 入口函数，创建任务线程
-│   ├── core/                   # 核心业务逻辑
-│   │   ├── pc_dashboard.c/h    # MQTT 客户端、JSON 解析、PC_Stats_t 数据结构
-│   │   ├── standby_manager.c/h # 待机管理器（锁屏/解锁协调）
-│   │   ├── usb_cdc_receiver.c/h# USB CDC ACM 接收器（通过 USB 线缆获取 PC 数据）
-│   │   ├── weather.c/h         # 天气数据（HTTP 获取或 MQTT 推送）
-│   │   └── wifi_reconnect.c/h  # Wi-Fi 自动连接
-│   ├── ui/                     # UI 呈现层
-│   │   ├── pc_dashboard_ui.c/h     # UI 生命周期、定时器回调
-│   │   ├── pc_dashboard_layout.c/h # V3 布局系统（TRIAD/VORTEX/PULSE）
-│   │   ├── pc_dashboard_theme.c/h  # 颜色主题（COBALT/INFERNO/SILICON）
-│   │   └── pc_dashboard_lock_screen.c/h  # 鎖定畫面
-│   ├── hal/                    # 硬件抽象層
-│   │   ├── backlight_ctrl.c/h  # PWM 背光控制
-│   │   ├── gpio_control.c/h    # GPIO 按键中断 → 延迟切换
-│   │   ├── lcd/                # LCD 驱动（ST7262、DBL070、LCDC 核心）
-│   │   └── usb/                # USB CDC ACM 自定义描述符（PID 覆盖）
-│   ├── config/                 # 配置头文件
-│   │   ├── threshold_config.h  # 统一配置：告警阈值/超时/背光/重试
-│   │   ├── lv_conf_project.h   # LVGL 配置覆盖
-│   │   ├── sdk_compat.h        # SDK 版本兼容层
-│   │   └── suppress_mqtt_log.h # MQTT 日志抑制
-│   ├── assets/                 # 图片/图标资源
-│   │   ├── icons/              # 22 个 LVGL 图标资源（C 数组）
-│   │   └── backgrounds/        # 3 个主题背景图片 + 时钟
-│   └── scripts_tools/          # PNG 转 LVGL C 数组脚本
-├── PC/                         # PC 端 Python 采集器
-├── env.sh                      # Linux/macOS 环境配置
-├── env.ps1                     # Windows PowerShell 环境配置
-├── env.bat                     # Windows cmd 环境配置
-├── CMakeLists.txt              # 顶层 CMake
-├── prj.conf                    # SDK Kconfig
-└── Kconfig                     # SDK 配置参考
+│   │   └── app_main.c                       # 入口函数，创建任务线程
+│   ├── core/                                # 核心业务逻辑
+│   │   ├── pc_dashboard.c/h                 # MQTT 客户端、JSON 解析、PC_Stats_t 数据结构
+│   │   ├── standby_manager.c/h              # 待机管理器（锁屏/解锁协调）
+│   │   ├── usb_cdc_receiver.c/h             # USB CDC ACM 接收器（通过 USB 线缆获取 PC 数据）
+│   │   ├── weather.c/h                      # 天气数据（HTTP 获取或 MQTT 推送）
+│   │   └── wifi_reconnect.c/h               # Wi-Fi 自动连接
+│   ├── ui/                                  # UI 呈现层
+│   │   ├── pc_dashboard_ui.c/h              # UI 生命周期、定时器回调
+│   │   ├── pc_dashboard_layout.h            # 布局系统头文件（全局声明）
+│   │   ├── pc_dashboard_layout_base.c       # 布局公共库 + 管理调度 + 天气 UI
+│   │   ├── pc_dashboard_layout_triad.c      # TRIAD 布局创建/更新
+│   │   ├── pc_dashboard_layout_vortex.c     # VORTEX 布局创建/更新
+│   │   ├── pc_dashboard_layout_pulse.c      # PULSE 布局创建/更新
+│   │   ├── pc_dashboard_theme.c/h           # 颜色主题（COBALT/INFERNO/SILICON）
+│   │   └── pc_dashboard_lock_screen.c/h     # 鎖定畫面
+│   ├── hal/                                 # 硬件抽象層
+│   │   ├── backlight_ctrl.c/h               # PWM 背光控制
+│   │   ├── gpio_control.c/h                 # GPIO 按键中断 → 延迟切换
+│   │   ├── lcd/                             # LCD 驱动（ST7262、DBL070、T1720A、LCDC 核心）
+│   │   │   ├── lcdc_core.c/h
+│   │   │   ├── lcd_drv.c
+│   │   │   ├── st7262_cfg.c/h
+│   │   │   ├── dbl070_cfg.c/h
+│   │   │   └── t1720a_cfg.c/h
+│   │   ├── touch/                           # 触摸驱动（仅 T1720A）
+│   │   │   ├── touch_gt911.c/h             # GT911 I2C 触摸控制器
+│   │   │   └── touch_gesture.c/h           # 滑动手势 → 布局/主题/亮度
+│   │   └── usb/                             # USB CDC ACM 自定义描述符（PID 覆盖）
+│   ├── config/                              # 配置头文件
+│   │   ├── threshold_config.h               # 统一配置：告警阈值/超时/背光/重试
+│   │   ├── lv_conf_project.h                # LVGL 配置覆盖
+│   │   ├── sdk_compat.h                     # SDK 版本兼容层
+│   │   └── suppress_mqtt_log.h              # MQTT 日志抑制
+│   ├── assets/                              # 图片/图标资源
+│   │   ├── icons/                           # 22 个 LVGL 图标资源（C 数组）
+│   │   └── backgrounds/                     # 3 个主题背景图片 + 时钟
+│   └── scripts_tools/                       # PNG 转 LVGL C 数组脚本
+├── PC/                                      # PC 端 Python 采集器
+├── env.sh                                   # Linux/macOS 环境配置
+├── env.ps1                                  # Windows PowerShell 环境配置
+├── env.bat                                  # Windows cmd 环境配置
+├── CMakeLists.txt                           # 顶层 CMake
+├── prj.conf                                 # SDK Kconfig
+└── Kconfig                                  # SDK 配置参考
 ```
 ---
 
@@ -196,7 +213,10 @@ flowchart LR
 
 1️⃣ **所需组件**
 
-- RTL8721F EVB（含 ST7262 RGB LCD 模块）
+- RTL8721F EVB（根据所选屏幕模块可选配 LCD 模块）
+  - **ST7262 RGB LCD 模块**（默认）— 有 GPIO 物理按键
+  - **DBL070 RGB LCD 模块** — 有 GPIO 物理按键
+  - **T1720A RGB LCD 模块**（含 GT911 电容触摸）— **纯触摸交互**
   - USB CDC 模式：无需 Wi-Fi 天线
   - MQTT 模式：需要 Wi-Fi 天线
 - MQTT Broker（支持 TLS 8883 端口，例如 EMQX Cloud）— **仅 MQTT 模式需要**，USB CDC 模式下不需要
@@ -205,18 +225,23 @@ flowchart LR
 
 2️⃣ **LCD 模块选择**
 
-项目支持两种 LCD 模块：
+项目支持三种 LCD 模块：
 
-| 模块 | 分辨率 | 接口 | 驱动文件 | 启用方式 | USB CDC |
-|------|--------|------|----------|----------|---------|
-| **ST7262**（默认） | 800×480 | RGB-565 并行 | `app_example/hal/lcd/st7262_cfg.c` | 默认，无需操作 | ✅ 支持 |
-| **DBL070** | 800×480 | RGB-565 并行 | `app_example/hal/lcd/dbl070_cfg.c` | 在 prj.conf 中设置 `CONFIG_SCREEN_DBL070=y`，或通过 `ameba.py menuconfig` 选择 | ❌ 无 USB 引脚 |
+| 模块 | 分辨率 | 接口 | 驱动文件 | 启用方式 | USB CDC | 交互方式 |
+|------|--------|------|----------|----------|---------|---------|
+| **ST7262**（默认） | 800×480 | RGB-565 并行 | `app_example/hal/lcd/st7262_cfg.c` | 默认，无需操作 | ✅ 支持 | GPIO 物理按键 |
+| **DBL070** | 800×480 | RGB-565 并行 | `app_example/hal/lcd/dbl070_cfg.c` | 在 prj.conf 中设置 `CONFIG_SCREEN_DBL070=y`，或通过 `ameba.py menuconfig` 选择 | ❌ 无 USB 引脚 | GPIO 物理按键 |
+| **T1720A** | 800×480 | RGB-888 并行 24-bit | `app_example/hal/lcd/t1720a_cfg.c` | 在 prj.conf 中设置 `CONFIG_SCREEN_T1720A=y`，或通过 `ameba.py menuconfig` 选择 | ✅ 支持 | **触摸手势**（GT911 电容屏，无物理按键） |
 
-引脚配置见 `app_example/hal/lcd/st7262_cfg.c` 和 `dbl070_cfg.c`。
+引脚配置见 `app_example/hal/lcd/st7262_cfg.c`、`dbl070_cfg.c` 和 `t1720a_cfg.c`。
 
 > ⚠️ `CONFIG_SCREEN_DBL070` 宏（通过 Kconfig 设置）会调整帧缓冲区基地址和 LCDC 时序参数以适配 DBL070 模块。两个驱动都会被编译，宏决定运行时激活哪一个。
 
-3️⃣ **GPIO 按键映射**
+3️⃣ **交互方式**
+
+> T1720A 使用电容触摸手势替代物理按键；ST7262/DBL070 使用 GPIO 按键。
+
+**GPIO 按键映射（ST7262 / DBL070）**
 
 | 操作 | ST7262 引脚 | DBL070 引脚 | 行为 |
 |------|------------|-------------|------|
@@ -226,6 +251,18 @@ flowchart LR
 | 亮度 ↓ | PA_27 | PB_17 | 短按 -10%，长按 ≥2s 跳至 10% |
 
 自动配置上拉/下拉电阻。基于中断触发，硬件消抖时间 250ms。待机模式下布局/主题按键被禁用，仅保留亮度控制。
+
+**触摸手势映射（T1720A — GT911 电容触摸）**
+
+| 手势 | 动作 | 生效范围 |
+|------|------|----------|
+| ← 左滑 | 下一个布局（TRIAD → VORTEX → PULSE） | Monitor 模式 |
+| → 右滑 | 上一个布局 | Monitor 模式 |
+| ↑ 上滑 | 亮度 +10%（带 OSD 弹窗） | 全部模式 |
+| ↓ 下滑 | 亮度 -10%（带 OSD 弹窗） | 全部模式 |
+| 双击 | 下一个主题（COBALT → INFERNO → SILICON） | Monitor 模式 |
+
+手势基于 LVGL 原生 `LV_EVENT_GESTURE` 检测，双击通过手工计时 + 距离阈值判定工作。
 
 ---
 
@@ -274,8 +311,8 @@ python ameba.py build
 3️⃣ **配置参数** — 详见下方 [配置参考](#配置参考)
 
 **模式选择（Kconfig）：**
-- **USB CDC 模式**（ST7262 默认）— 在 `prj.conf` 中设置 `CONFIG_USB_CDC_MODE=y`，或通过 `ameba.py menuconfig` 启用。无需 WiFi 凭证。
-- **MQTT 模式** — 在 `prj.conf` 中设置 `CONFIG_USB_CDC_MODE=n`（或 `# CONFIG_USB_CDC_MODE is not set`）。屏幕选择在 `ameba.py menuconfig` 中切换。
+- **USB CDC 模式**（ST7262/T1720A 默认）— 在 `prj.conf` 中设置 `CONFIG_USB_CDC_MODE=y`，或通过 `ameba.py menuconfig` 启用。无需 WiFi 凭证。
+- **MQTT 模式** — 在 `prj.conf` 中设置 `CONFIG_USB_CDC_MODE=n`（或 `# CONFIG_USB_CDC_MODE is not set`）。屏幕选择（ST7262 / DBL070 / T1720A）在 `ameba.py menuconfig` 中切换。
 
 通用配置：
 - MQTT 凭证 → `pc_dashboard.h`（MQTT 模式或 PC 端 SHT3X 转发时需要）
@@ -371,7 +408,9 @@ PC 锁屏时，仪表盘自动切换到模拟时钟界面：
 
 - **Sweep 指针扫入动画** — 首次获取有效时间后，秒/分/时针从 12 点方向以不同速度（秒针 1s、分针 1.5s、时针 2s）平滑扫到当前位置
 - **日期窗口** — 3 点钟位置显示日期和星期，跨日自动更新
-- **非正方形像素补偿** — DBL070 像素宽高比 1.078:1，表盘图像预补偿为 400×432，确保物理圆形
+- **非正方形像素补偿**：
+  - **DBL070** — 像素宽高比 1.078:1，表盘图像预补偿为 400×432，确保物理圆形
+  - **T1720A** — 像素宽高比 0.333:1（像素 H 0.0635mm × V 0.1905mm），使用物理正圆 400×400 源图，无需补偿；时针/分针长度不再额外缩放
 - **1Hz 精准刷新** — 每秒更新指针位置，仅重绘指针区域（非全屏），配合 VBlank 同步避免撕裂
 - **SNTP 回退** — 若 MQTT 尚未传入时间戳，自动尝试 SNTP 获取时间
 
@@ -382,10 +421,14 @@ PC 锁屏时，仪表盘自动切换到模拟时钟界面：
 通过 TIM4 硬件 PWM 驱动背光 MOSFET，支持 0%~100% 无级调节：
 
 - **GPIO 按键控制** — BL_UP / BL_DOWN 按键，短按步进 10%，长按（≥2s）跳至极值（100% / 10%）
+- **触摸手势控制（T1720A）** — 上滑/下滑分别调高/调低亮度（步进 10%），与物理按键等效力
 - **OSD 弹窗** — 亮度变化时在屏幕底部中央弹出 OSD（1.5s 自动消失），显示当前百分比和进度条
-- **待机降亮度** — 进入待机模式自动降至 `BRIGHTNESS_STANDBY_PCT`（默认 20%），解锁恢复
-- **伽马校正** — 背光亮度曲线为立方（gamma ≈ 3.0），将敏感的低 PWM 区域分配到更多用户步进，避免低亮度区间不可控
-- **待机模式按键策略** — 布局/主题按键中断硬件禁用，仅保留亮度控制可用
+- **待机降亮度** — 进入待机模式自动降至 `BRIGHTNESS_STANDBY_PCT`（ST7262/DBL070: 20%，T1720A: 3%），解锁恢复
+- **伽马校正**：
+  - ST7262/DBL070 — 立方曲线（gamma ≈ 3.0），补偿低 PWM 区域
+  - **T1720A** — **二次方曲线**（无 MOSFET 饱和效应），`duty = (user_pct / 100)²`
+  - T1720A 最低亮度 `BL_MIN_PCT=2`
+- **待机模式按键策略** — ST7262/DBL070 的布局/主题按键中断硬件禁用；T1720A 触摸手势在待机模式下布局/主题手势也被禁用，仅保留亮度控制
 
 #### ⚠️ 阈值告警系统
 
@@ -507,7 +550,7 @@ MCU 通过 `strstr()` 直接解析这些平面键值对，无需外部 JSON 库�
 
 ```c
 #define MQTT_BROKER_ADDRESS     "你的Broker地址.emqxsl.cn"
-#define MQTT_CLIENT_ID          "PC_DASHBOARD_MCU_1_COM19"  /* 由 CONFIG_SCREEN_DBL070 宏自动选择 */
+#define MQTT_CLIENT_ID          "PC_DASHBOARD_MCU_1_COM19"  /* 由 CONFIG_SCREEN_T1720A 宏自动选择 */
 #define MQTT_USERNAME           "你的用户名"
 #define MQTT_PASSWORD           "你的密码"
 ```
@@ -542,8 +585,9 @@ MCU 通过 `strstr()` 直接解析这些平面键值对，无需外部 JSON 库�
 | `UI_UPDATE_INTERVAL_MS` | 1000ms | LVGL 定时器间隔 |
 | `RETRY_LIMIT` | 10 | WiFi 最大重连次数 |
 | `RETRY_INTERVAL` | 5000ms | WiFi 重连间隔 |
-| `BL_MIN_PCT` | 10% | 背光硬件最低亮度 |
+| `BL_MIN_PCT` | ST7262/DBL070: 10%，T1720A: 2% | 背光硬件最低亮度 |
 | `BL_STEP_PCT` | 10% | 背光步进值 |
+| `BRIGHTNESS_STANDBY_PCT` | ST7262/DBL070: 20%，T1720A: 3% | 待机模式背光亮度 |
 
 #### 📁 其他配置
 

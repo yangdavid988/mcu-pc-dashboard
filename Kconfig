@@ -19,12 +19,15 @@ config SCREEN_ST7262
 
 config SCREEN_DBL070
     bool "DBL070 (800x480 RGB-565 parallel, no USB pins)"
+
+config SCREEN_T1720A
+    bool "T1720A (800x480 RGB-888 parallel, with GT911 touch)"
 endchoice
 
 config USB_CDC_MODE
     bool "USB CDC mode (ST7262 only, all data via USB cable)"
     default y
-    depends on SCREEN_ST7262
+    depends on SCREEN_ST7262 || SCREEN_T1720A
     select USB_OTG_EN_MENU
     # NOTE: USBD_CDC_ACM_MENU is deliberately NOT selected here.
     # Our custom wrapper (usbd_cdc_acm_custom.c) replaces the SDK
@@ -46,7 +49,7 @@ config USB_CDC_MODE
         visibility.  Use bms menuconfig to manually set USB and
         WiFi options when switching screen panels.
 
-        Only available with ST7262 screen. DBL070 has no USB pins
-        and forces this option off.
+        Available with ST7262 and T1720A screens (both have USB pins).
+        DBL070 has no USB pins, so it forces this off.
 
 endmenu

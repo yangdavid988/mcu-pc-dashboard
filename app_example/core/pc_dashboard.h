@@ -68,6 +68,8 @@
 #define MQTT_CLIENT_ID              "PC_DASHBOARD_MCU_1_COM19"
 #elif defined(CONFIG_SCREEN_ST7262)
 #define MQTT_CLIENT_ID              "PC_DASHBOARD_MCU_2_COM18"
+#elif defined(CONFIG_SCREEN_T1720A)
+#define MQTT_CLIENT_ID              "PC_DASHBOARD_MCU_3_T1720A"
 #endif
 #define MQTT_USERNAME               "YOUR_MQTT_USERNAME"
 #define MQTT_PASSWORD               "YOUR_MQTT_PASSWORD"

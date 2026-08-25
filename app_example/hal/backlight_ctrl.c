@@ -100,20 +100,23 @@ static uint32_t g_fade_start_ms  = 0;     /* timestamp when pending/active began
  *     user  20 -> duty 4.0 %   (dim but visible)
  *     user  50 -> duty 25 %
  *     user 100 -> duty 100 %
+ *
+ * T1720A: shares ST7262-like quadratic behavior (no MOSFET saturation,
+ *   direct PWM drive).  Same remap as ST7262.
  */
 static float backlight_remap(int user_pct)
 {
 #ifdef CONFIG_SCREEN_DBL070
     float x = (float) user_pct / 100.0f;
     return x * x * x; /* cubic — MOSFET saturation compensation */
-#elif defined(CONFIG_SCREEN_ST7262)
-    /* ST7262 */
+#else
+    /* ST7262 and T1720A */
     float x = (float) user_pct / 100.0f;
     return x * x; /* quadratic — gentle low-end, no MOSFET */
 #endif
 }
 
-#ifdef CONFIG_SCREEN_ST7262
+#if defined(CONFIG_SCREEN_ST7262) || defined(CONFIG_SCREEN_T1720A)
 /*
  * Square root (ST7262 inverse remap).
  * Newton-Raphson iteration, no math.h needed.
@@ -139,7 +142,7 @@ static float _sqrt(float x)
 
     return y * scale;
 }
-#endif /* CONFIG_SCREEN_ST7262 */
+#endif /* CONFIG_SCREEN_ST7262 or CONFIG_SCREEN_T1720A */
 
 #ifdef CONFIG_SCREEN_DBL070
 /*
@@ -191,12 +194,29 @@ void backlight_init(void)
         PC_1;
 #elif defined(CONFIG_SCREEN_ST7262)
         PB_3; /* _PA_17 is DISP, not backlight */
+#elif defined(CONFIG_SCREEN_T1720A)
+        PA_25;
 #endif
 
     g_bl_pin      = bl_pin;
-    g_bl_gpio_pin = (bl_pin == PC_1) ? (u32) _PC_1 : (u32) _PB_3;
+    g_bl_gpio_pin =
+#ifdef CONFIG_SCREEN_DBL070
+        (u32) _PC_1;
+#elif defined(CONFIG_SCREEN_ST7262)
+        (u32) _PB_3;
+#elif defined(CONFIG_SCREEN_T1720A)
+        (u32) _PA_25;
+#endif
 
-    RTK_LOGI(TAG, "backlight_init: raw PWM on %s\n", bl_pin == PC_1 ? "_PC_1" : "_PB_3");
+    RTK_LOGI(TAG, "backlight_init: raw PWM on %s\n",
+#ifdef CONFIG_SCREEN_DBL070
+             "_PC_1"
+#elif defined(CONFIG_SCREEN_ST7262)
+             "_PB_3"
+#elif defined(CONFIG_SCREEN_T1720A)
+             "_PA_25"
+#endif
+             );
 
     /* ---- 1. Enable TIM4 peripheral clock ---- */
     RCC_PeriphClockCmd(APBPeriph_TIMx[BL_TIMER_IDX],
@@ -340,10 +360,10 @@ void backlight_fade_tick(void)
 
     /* Inverse remap: duty -> user percentage */
     int user_pct;
-#ifdef CONFIG_SCREEN_DBL070
+#if defined(CONFIG_SCREEN_DBL070)
     user_pct = (int) (_cbrt(duty) * 100.0f + 0.5f);
-#elif defined(CONFIG_SCREEN_ST7262)
-    /* ST7262: quadratic inverse = sqrt */
+#else
+    /* ST7262 and T1720A: quadratic inverse = sqrt */
     user_pct = (int) (_sqrt(duty) * 100.0f + 0.5f);
 #endif
     if (user_pct > 100)

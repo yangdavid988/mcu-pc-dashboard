@@ -8,18 +8,18 @@ ameba_global_define(LV_CONF_PATH="config/lv_conf_project.h")
 
 # ===== Screen + Mode selection =====
 # These are configured via Kconfig:  pc_dashboard_demo/Kconfig
-#   - Screen:       CONFIG_SCREEN_ST7262 (default) / CONFIG_SCREEN_DBL070
-#   - USB CDC mode: CONFIG_USB_CDC_MODE (depends on SCREEN_ST7262)
+#   - Screen:       CONFIG_SCREEN_ST7262 (default) / CONFIG_SCREEN_DBL070 / CONFIG_SCREEN_T1720A
+#   - USB CDC mode: CONFIG_USB_CDC_MODE (depends on SCREEN_ST7262 || SCREEN_T1720A)
 #
 # NOTE: Kconfiglib uses OR-semantics for second-definition 'depends on'
 # on existing Symbols, so secondary config blocks cannot constrain SDK
-# symbols — they can only expand visibility.  Use bms menuconfig to
+# symbols â€” they can only expand visibility.  Use bms menuconfig to
 # manually set USB/WiFi options when switching between ST7262 (USB CDC)
 # and DBL070 (WiFi) modes.
 #
 # The Kconfig pipeline generates platform_autoconf.h per core (KM4NS/KM4TZ)
 # which is included globally via the SDK include path.  No add_definitions()
-# is needed — platform_autoconf.h provides the CONFIG_* defines to all
+# is needed â€” platform_autoconf.h provides the CONFIG_* defines to all
 # compilation units.
 
 # ===== Private: builds our target =====
@@ -32,10 +32,11 @@ ameba_list_append(private_sources
     # hal/usb/
     hal/usb/usbd_cdc_acm_custom.c
     # ui/
-    ui/pc_dashboard_ui.c ui/pc_dashboard_lock_screen.c ui/pc_dashboard_theme.c ui/pc_dashboard_layout.c
+    ui/pc_dashboard_ui.c ui/pc_dashboard_lock_screen.c ui/pc_dashboard_theme.c ui/pc_dashboard_layout_base.c ui/pc_dashboard_layout_triad.c ui/pc_dashboard_layout_vortex.c ui/pc_dashboard_layout_pulse.c
     # hal/
     hal/backlight_ctrl.c hal/gpio_control.c
-    hal/lcd/lcd_drv.c hal/lcd/lcdc_core.c hal/lcd/st7262_cfg.c hal/lcd/dbl070_cfg.c
+    hal/lcd/lcd_drv.c hal/lcd/lcdc_core.c hal/lcd/st7262_cfg.c hal/lcd/dbl070_cfg.c hal/lcd/t1720a_cfg.c
+    hal/touch/touch_gt911.c hal/touch/touch_gesture.c
     # assets/icons/
     assets/icons/icon_arrow_down.c assets/icons/icon_arrow_up.c assets/icons/icon_battery.c
     assets/icons/icon_bolt.c assets/icons/icon_cpu.c assets/icons/icon_disk.c
@@ -48,7 +49,7 @@ ameba_list_append(private_sources
     assets/icons/icon_fog.c
     # assets/backgrounds/
     assets/backgrounds/bg_cobalt.c assets/backgrounds/bg_inferno.c assets/backgrounds/bg_silicon.c
-    assets/backgrounds/clock432.c
+    assets/backgrounds/clock432.c assets/backgrounds/clock400.c
 )
 ameba_add_internal_library(app_example
     p_SOURCES

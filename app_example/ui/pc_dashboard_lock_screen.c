@@ -1,13 +1,11 @@
 #include "ui/pc_dashboard_lock_screen.h"
 #include "core/pc_dashboard.h"
 #include "ui/pc_dashboard_theme.h"
+#include "ui/pc_dashboard_layout.h"
 #include "hal/backlight_ctrl.h"
 #include <math.h>
 #include <stdio.h>
 #include <time.h>
-
-/* clock432 image (pre-compensated for DBL070 pixel geometry) */
-LV_IMG_DECLARE(clock432);
 
 #ifndef TAG
 #define TAG "LOCK_SCREEN"
@@ -16,19 +14,24 @@ LV_IMG_DECLARE(clock432);
 /* ========================================================================
  * Clock face geometry
  *
- * DBL070 pixel pitch: 0.1923mm (H) x 0.1784mm (V)
- * Ratio = 0.1923 / 0.1784 ≈ 1.0779
+ * Two screens are supported, each with different pixel geometry:
  *
- * To display a physically circular clock, the image must be pre-compensated:
- *   width  = 400 px
- *   height = 400 × 1.0779 ≈ 432 px
+ * DBL070 pixel pitch: 0.1923mm (H) x 0.1784mm (V)
+ *   Ratio = 0.1923 / 0.1784 ≈ 1.0779
+ *   To display a physically circular clock, the image is pre-compensated:
+ *   width = 400 px, height = 400 × 1.0779 ≈ 432 px (clock432)
+ *
+ * T1720A pixel pitch: 0.0635mm (H) x 0.1905mm (V)
+ *   Ratio = 0.0635 / 0.1905 ≈ 0.3333
+ *   V pixels are ~3x taller than H pixels, so a separate 400×400
+ *   physically-circular clock face is used (clock400).
  *
  * All hand endpoint Y coordinates are multiplied by PIXEL_RATIO_X1000 / 1000
  * so the hand traces a PHYSICAL circle on the display.
  *
  * The clock sits in a transparent 400 x 480 container at screen centre
  * so the theme gradient / bg_image shows through at the 24 px strips.
- * The clock432 image fully covers the clock area.
+ * The clock image fully covers the clock area.
  *
  * The display uses two DIRECT-mode framebuffers with VBlank-synchronised
  * DMA flip.  On each 1 Hz tick the full screen is invalidated, causing
@@ -46,9 +49,36 @@ LV_IMG_DECLARE(clock432);
 #define LOCAL_CENTER_X    (CLOCK_AREA_W / 2) /* 200 */
 #define LOCAL_CENTER_Y    (CLOCK_AREA_H / 2) /* 240 */
 #define CLOCK_IMG_W       400
-#define CLOCK_IMG_H       432  /* pre-compensated: 400 * 0.1923 / 0.1784 */
 #define CLOCK_RADIUS      200  /* short-dimension radius (half of CLOCK_IMG_W) */
-#define PIXEL_RATIO_X1000 1078 /* 0.1923 / 0.1784 * 1000 */
+
+/* Per-screen clock face image and pixel geometry.
+ * DBL070 uses clock432 (pre-compensated, 400×432);
+ * T1720A uses clock400 (physically circular image, 400×400).
+ *
+ * PIXEL_RATIO_X1000: hand trace compensation for non-square pixels.
+ * DBL070 pixels are slightly wider than tall (0.1923H×0.1784V),
+ * so Y is scaled up 1.078× to trace a physical circle on the
+ * pre-compensated clock432 image.
+ *
+ * T1720A pixels are 3× taller than wide (0.0635H×0.1905V), and
+ * clock400 is a 400×400 image — the clock face displays as-is
+ * (physically stretched).  Hands should match the image geometry,
+ * so PIXEL_RATIO=1000 (no extra compensation): the hand trace's
+ * pixel aspect ratio matches the displayed image.              */
+#ifdef CONFIG_SCREEN_T1720A
+#define CLOCK_IMG_H        400       /* physically circular source */
+#define PIXEL_RATIO_X1000  1000      /* no compensation — image displays as-is */
+#define CLOCK_IMG_DECLARE  LV_IMG_DECLARE(clock400)
+#define CLOCK_IMG_SRC      (&clock400)
+#else
+#define CLOCK_IMG_H        432       /* pre-compensated: 400 × 1.0779 */
+#define PIXEL_RATIO_X1000  1078      /* 0.1923 / 0.1784 * 1000 */
+#define CLOCK_IMG_DECLARE  LV_IMG_DECLARE(clock432)
+#define CLOCK_IMG_SRC      (&clock432)
+#endif
+
+/* LV_IMG_DECLARE expands to "extern const lv_image_dsc_t <name>;" — its own ; */
+CLOCK_IMG_DECLARE
 
 /* Hand geometry */
 #define HAND_SEC_LEN  165
@@ -98,7 +128,7 @@ static int  g_pend_sec      = 0;
 static int  g_pend_min      = 0;
 static int  g_pend_hour     = 0;
 
-/* PSRAM-cached clock432 image descriptor (file-level so update()
+/* PSRAM-cached clock image descriptor (file-level so update()
  * can pre-warm from PSRAM — not flash — before each 1 Hz render). */
 static bool         s_img_cached = false;
 static lv_img_dsc_t s_img_ram;
@@ -239,15 +269,15 @@ void create_lock_screen_clock(void)
     /* Hide persistent watermark during CLOCK mode */
     theme_watermark_show(false);
 
-    /* ---- Pre-load clock432 to PSRAM (one-time) ----
+    /* ---- Pre-load clock image to PSRAM (one-time) ----
      *
-     * clock432's raw ARGB8888 pixel data is in SPI flash.  On this
+     * The clock face's raw ARGB8888 pixel data is in SPI flash.  On this
      * platform the MPU may disable D-cache for flash-mapped regions,
      * making every renderer pixel-read go directly to the SPI bus.
-     * The first full-frame render, which composites the entire 691 KB
-     * image, stalls on ~2700 flash page-setup penalties — producing
-     * partial / zero data for an upper-left region of the clock face
-     * on the very first frame (visible as background-through-clock432).
+     * The first full-frame render, which composites the entire 640 KB
+     * image (400×400×4), stalls on ~2500 flash page-setup penalties —
+     * producing partial / zero data for an upper-left region of the
+     * clock face on the very first frame.
      *
      * Fix: copy the raw pixel data into a PSRAM buffer once, then
      * point the LVGL image descriptor at the PSRAM copy.  PSRAM is
@@ -258,52 +288,44 @@ void create_lock_screen_clock(void)
      * layout only manages the first 4 MB of PSRAM (0x60000000 –
      * 0x60400000 on this platform).  The framebuffers (2 × 1·5 MB),
      * LVGL heap, and network buffers already consume most of that
-     * region, making a contiguous 691 KB block unlikely.  Instead we
+     * region, making a contiguous 640 KB block unlikely.  Instead we
      * place the copy at a fixed address in the upper (unmanaged)
      * PSRAM range — boot log confirms actual PSRAM goes to 0x61000000,
      * so 0x60500000 is safely above the layout limit.               */
     {
-        /*
-         * Debug: confirm which source the renderer will use.
-         * Remove after the flash root cause is verified.
-         */
+        const lv_image_dsc_t* clock_src = CLOCK_IMG_SRC;
         if (!s_img_cached)
         {
             /*
              * Place the copy at 0x60300000 — safely within the 4 MB
              * MPU-cached PSRAM region (0x60000000 – 0x603FFFFF).
              *
-             * CRITICAL: the entire clock432 bitmap (691200 bytes) must
-             * fit within the cacheable range.  At 0x60300000 the data
-             * ends at 0x603A8C00, well below the 0x60400000 MPU
+             * CRITICAL: the image bitmap must fit within the cacheable
+             * range.  At 0x60300000 the data ends at 0x6039C400 (400×400×4)
+             * or 0x603A8C00 (400×432×4), well below the 0x60400000 MPU
              * boundary.  Addresses ≥ 0x60400000 are Device / Strongly-
              * Ordered memory where LDM/STM multi-word loads used by
-             * the LVGL SW renderer return incorrect pixel data —
-             * visible as background flashing through clock432.
-             *
-             * Previous address 0x602F0000 fell in the middle of the
-             * linker-managed KM4TZ_BD_PSRAM heap range; 0x603F0000
-             * straddled the 0x60400000 cacheability boundary.         */
+             * the LVGL SW renderer return incorrect pixel data.          */
             uint8_t* buf = (uint8_t*) 0x60300000u;
-            memcpy(buf, clock432.data, clock432.data_size);
-            DCache_Clean((uint32_t) buf, clock432.data_size);
+            memcpy(buf, clock_src->data, clock_src->data_size);
+            DCache_Clean((uint32_t) buf, clock_src->data_size);
             __DSB();
 
-            memcpy(&s_img_ram, &clock432, sizeof(lv_img_dsc_t));
+            memcpy(&s_img_ram, clock_src, sizeof(lv_img_dsc_t));
             s_img_ram.data = (const uint8_t*) buf;
             s_img_cached   = true;
 
             RTK_LOGI("LOCK_SCREEN",
-                     "clock432 copied to PSRAM (%d bytes)\n",
-                     (int) clock432.data_size);
+                     "clock image copied to PSRAM (%d bytes)\n",
+                     (int) clock_src->data_size);
         }
         else
         {
             RTK_LOGI("LOCK_SCREEN",
-                     "clock432 reuse PSRAM cache\n");
+                     "clock image reuse PSRAM cache\n");
         }
 
-        /* ---- 1. Clock face (400 x 432) ---- */
+        /* ---- 1. Clock face (CLOCK_IMG_W x CLOCK_IMG_H) ---- */
         lv_obj_t* img = lv_image_create(g_lock_container);
         lv_image_set_src(img, &s_img_ram);
         lv_obj_set_size(img, CLOCK_IMG_W, CLOCK_IMG_H);
@@ -406,10 +428,10 @@ void create_lock_screen_clock(void)
 
     /* Pre-warm: sequential 32-bit reads through D-cache so the
      * first lv_refr_now() renderer encounters hot cache lines for
-     * the entire PSRAM-based clock432 bitmap.                       */
+     * the entire PSRAM-based clock face bitmap.                       */
     {
         const volatile uint32_t* p                            = (const volatile uint32_t*) s_img_ram.data;
-        uint32_t                 word_count                   = clock432.data_size / 4;
+        uint32_t                 word_count                   = s_img_ram.data_size / 4;
         volatile uint32_t        warm __attribute__((unused)) = 0;
         for (uint32_t i = 0; i < word_count; i++)
             warm += p[i];
@@ -624,9 +646,9 @@ void update_lock_screen_clock(void)
     }
 
     /*
-     * Pre-warm the clock432 bitmap in data cache from the PSRAM copy,
-     * NOT from the original flash source (clock432.data).  The 2-4 second
-     * sweep animation constantly reads clock432 pixels for hand bounding-
+     * Pre-warm the clock face bitmap in data cache from the PSRAM copy,
+     * NOT from the original flash source.  The 2-4 second
+     * sweep animation constantly reads clock face pixels for hand bounding-
      * box compositing; by the time the animation finishes the image data
      * has typically been evicted from the ~32 KB L1 cache.  Without a
      * forced warm-up the first lv_refr_now() would encounter cold cache
@@ -634,11 +656,11 @@ void update_lock_screen_clock(void)
      * exactly one frame — visible as the theme background flashing through.
      *
      * NB: must read from s_img_ram.data (PSRAM, D-cacheable) — the
-     * original clock432.data is in SPI flash, mapped uncacheable on this
+     * original image data is in SPI flash, mapped uncacheable on this
      * platform, so reading from flash misses the D-cache entirely.       */
     {
         const volatile uint8_t* p                            = (const volatile uint8_t*) s_img_ram.data;
-        uint32_t                sz                           = clock432.data_size;
+        uint32_t                sz                           = s_img_ram.data_size;
         volatile uint8_t        warm __attribute__((unused)) = 0;
         for (uint32_t i = 0; i < sz; i += 32)
             warm += p[i];
@@ -670,8 +692,13 @@ void update_lock_screen_clock(void)
 }
 
 /* ========================================================================
- * Unlock transition: fade-out the clock container (reveals monitor behind).
- * The ready callback destroys the clock UI once the fade completes.
+ * Unlock transition: fade-in monitor layout (already on top of clock).
+ *
+ * The monitor layout was created by layout_switch() AFTER the clock
+ * container, so in LVGL's z-order it sits ABOVE the clock naturally.
+ * Instead of moving the clock to front (which flashes one frame of
+ * full-opa clock), we keep the clock underneath and fade the monitor
+ * in from transparent → opaque.  On completion the clock is destroyed.
  * ======================================================================== */
 
 static void unlock_fade_cb(void* var, int32_t v)
@@ -720,19 +747,29 @@ void start_unlock_transition(void)
     /* Immediately mark as inactive so the 1 Hz timer won't re-trigger */
     g_lock_screen_active = false;
 
-    /* Move clock container to foreground: the monitor layout has already been
-     * created BEHIND the clock; once the clock fades out the monitor is revealed. */
-    lv_obj_move_foreground(g_lock_container);
-
-    lv_anim_t a;
-    lv_anim_init(&a);
-    lv_anim_set_var(&a, g_lock_container);
-    lv_anim_set_exec_cb(&a, unlock_fade_cb);
-    lv_anim_set_values(&a, LV_OPA_COVER, LV_OPA_TRANSP);
-    lv_anim_set_time(&a, 300);
-    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
-    lv_anim_set_ready_cb(&a, unlock_fade_ready_cb);
-    lv_anim_start(&a);
+    /* The monitor layout (already above clock in z-order): fade it in from
+     * transparent → opaque so the clock beneath it appears to dissolve away.
+     * No move_foreground needed — layout_switch creates on scr_act() AFTER
+     * the clock, so the layout is naturally on top. */
+    lv_obj_t* monitor = layout_get_container();
+    if (monitor)
+    {
+        lv_obj_set_style_opa(monitor, LV_OPA_TRANSP, 0);
+        lv_anim_t a;
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, monitor);
+        lv_anim_set_exec_cb(&a, unlock_fade_cb);
+        lv_anim_set_values(&a, LV_OPA_TRANSP, LV_OPA_COVER);
+        lv_anim_set_time(&a, 300);
+        lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+        lv_anim_set_ready_cb(&a, unlock_fade_ready_cb);
+        lv_anim_start(&a);
+    }
+    else
+    {
+        /* No monitor layout — just destroy clock directly */
+        unlock_fade_ready_cb(NULL);
+    }
 }
 
 /* ========================================================================

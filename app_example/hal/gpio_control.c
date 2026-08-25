@@ -34,7 +34,8 @@ static volatile bool g_pending_theme_switch  = false;
  * ======================================================================== */
 
 /* DBL070: PB_15 = up, PB_17 = down
- * ST7262: PA_21 = up, PA_27 = down */
+ * ST7262: PA_21 = up, PA_27 = down
+ * T1720A: not yet assigned (touch uses PA_31/_PB_0, no GPIO buttons defined) */
 #ifdef CONFIG_SCREEN_DBL070
 #define BL_UP_PIN   _PB_15
 #define BL_DOWN_PIN _PB_17
@@ -43,6 +44,7 @@ static volatile bool g_pending_theme_switch  = false;
 #define BL_DOWN_PIN _PA_27
 #endif
 
+#ifndef CONFIG_SCREEN_T1720A
 static gpio_irq_t gpio_bl_up;
 static gpio_irq_t gpio_bl_down;
 
@@ -50,6 +52,7 @@ static volatile bool     g_pending_bl_up    = false;
 static volatile bool     g_pending_bl_down  = false;
 static volatile uint32_t g_bl_up_press_ms   = 0;
 static volatile uint32_t g_bl_down_press_ms = 0;
+#endif /* !CONFIG_SCREEN_T1720A */
 
 /* ===== UI buttons suspended flag (standby mode) ===== */
 static volatile bool g_ui_buttons_disabled = false;
@@ -163,6 +166,7 @@ void brightness_osd_show(int percent)
  * Unified GPIO button ISR — decodes which pin triggered from the event
  * parameter (see ameba_gpio.c encoding) and dispatches accordingly.
  * ======================================================================== */
+#ifndef CONFIG_SCREEN_T1720A
 static void button_irq_handler(uint32_t id, uint32_t event)
 {
     (void) id;
@@ -238,6 +242,7 @@ static void button_irq_handler(uint32_t id, uint32_t event)
     }
 #endif /* CONFIG_SCREEN_* */
 }
+#endif /* !CONFIG_SCREEN_T1720A */
 
 /* ========================================================================
  * Deferred processing — called from LVGL timer context
@@ -275,6 +280,7 @@ void gpio_control_process(void)
 
 process_brightness:
 
+#ifndef CONFIG_SCREEN_T1720A
     /* ---- Brightness up ---- */
     if (g_pending_bl_up)
     {
@@ -319,6 +325,7 @@ process_brightness:
             brightness_osd_show(backlight_get());
         }
     }
+#endif /* !CONFIG_SCREEN_T1720A */
 }
 
 /* ========================================================================
@@ -347,9 +354,15 @@ void gpio_control_init(void)
     gpio_irq_pull_ctrl(&gpio_theme, PullDown);
     gpio_irq_set(&gpio_theme, IRQ_FALL, 1);
     gpio_irq_enable(&gpio_theme);
+#elif defined(CONFIG_SCREEN_T1720A)
+    /* T1720A: _PB_0 and _PA_31 are used by GT911 touch (RST/INT).
+     * No physical GPIO buttons assigned yet — touch provides UI interaction. */
+    (void) gpio_layout;
+    (void) gpio_theme;
 #endif
 
     /* ---- Brightness +/- buttons ---- */
+#ifndef CONFIG_SCREEN_T1720A
     gpio_irq_init(&gpio_bl_up, BL_UP_PIN, button_irq_handler, 0);
     gpio_irq_pull_ctrl(&gpio_bl_up, PullUp);
     gpio_irq_set(&gpio_bl_up, IRQ_FALL, 1);
@@ -359,8 +372,13 @@ void gpio_control_init(void)
     gpio_irq_pull_ctrl(&gpio_bl_down, PullUp);
     gpio_irq_set(&gpio_bl_down, IRQ_FALL, 1);
     gpio_irq_enable(&gpio_bl_down);
+#endif
 
-    RTK_LOGI(TAG, "GPIO buttons initialized (bl up=0x%02X down=0x%02X)\n", (unsigned) BL_UP_PIN, (unsigned) BL_DOWN_PIN);
+#ifndef CONFIG_SCREEN_T1720A
+    RTK_LOGI(TAG, "GPIO buttons initialized\n");
+#else
+    RTK_LOGI(TAG, "T1720A: no GPIO buttons (touch-only UI)\n");
+#endif
 }
 
 /* ========================================================================
@@ -373,15 +391,20 @@ void gpio_control_init(void)
  * ======================================================================== */
 void gpio_control_suspend_ui_buttons(void)
 {
+#ifndef CONFIG_SCREEN_T1720A
     g_ui_buttons_disabled = true;
     gpio_irq_set(&gpio_layout, IRQ_FALL, 0);
     gpio_irq_set(&gpio_theme, IRQ_FALL, 0);
     g_pending_layout_switch = false;
     g_pending_theme_switch  = false;
+#else
+    (void) 0;
+#endif
 }
 
 void gpio_control_resume_ui_buttons(void)
 {
+#ifndef CONFIG_SCREEN_T1720A
     /* Keep disabled while re-enabling — any stale NVIC pending that fires
      * from the gpio_irq_set() re-enable will hit the disabled guard in the
      * ISR and return without setting a pending flag. */
@@ -398,4 +421,7 @@ void gpio_control_resume_ui_buttons(void)
     g_pending_layout_switch = false;
     g_pending_theme_switch  = false;
     g_ui_buttons_disabled   = false;
+#else
+    (void) 0;
+#endif
 }

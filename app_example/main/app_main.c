@@ -5,6 +5,10 @@
 #include "hal/gpio_control.h"
 #include "core/wifi_reconnect.h"
 #include "core/usb_cdc_receiver.h"
+#ifdef CONFIG_SCREEN_T1720A
+#include "hal/touch/touch_gt911.h"
+#include "hal/touch/touch_gesture.h"
+#endif
 /* PPE hardware-accelerated draw unit (SDK AmebaGreen2 AG2 driver) */
 // #include "lv_draw_ppe.h"
 #include "ameba_pmu.h"         /* pmu_acquire_wakelock */
@@ -94,7 +98,7 @@ static void lvgl_main_thread(void* parameters)
     gpio_control_init();
     RTK_LOGI(TAG, "GPIO buttons initialized\n");
 
-    /* LVGL initialization */
+    /* LVGL initialization (must precede any lv_* API calls) */
     lv_init();
     lv_tick_set_cb(custom_tick_get);
 
@@ -109,8 +113,18 @@ static void lvgl_main_thread(void* parameters)
                            LVGL_BUF_SIZE,
                            LV_DISPLAY_RENDER_MODE_DIRECT);
 
+    /* Touch initialization (T1720A only) — after display create so lv_indev_create() has a display */
+#ifdef CONFIG_SCREEN_T1720A
+    touch_gt911_init();
+#endif
+
     /* Create dashboard UI */
     create_dashboard_ui();
+
+    /* Register touch gesture handler (T1720A touch-only UI) */
+#ifdef CONFIG_SCREEN_T1720A
+    touch_gesture_init();
+#endif
 
     /* Start UI update timer (1s interval) */
     g_dashboard_timer = lv_timer_create(dashboard_timer_cb, UI_UPDATE_INTERVAL_MS, NULL);
