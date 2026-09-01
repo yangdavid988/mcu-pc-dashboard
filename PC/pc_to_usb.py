@@ -828,7 +828,7 @@ def get_system_stats():
 
     gpu = _backfill_gpu_from_lhm(gpu, lhm)
 
-    # Weather (OpenWeatherMap, 10-min cache) -- only embed in USB JSON when changed,
+    # Weather (OpenWeatherMap, 10-min cache) — only embed in USB JSON when changed,
     # aligning with pc_to_emqx.py's publish_weather_if_changed() pattern.
     weather = get_weather()
     if WEATHER_ENABLED and weather is not None:
@@ -887,7 +887,7 @@ def get_system_stats():
         "gpu_temp_c": gpu["temp_c"] if gpu else None,
         "disk_io_percent": disk_io_percent,
 
-        # Weather fields ¡ª only include when the snapshot changed, matching
+        # Weather fields — only include when the snapshot changed, matching
         # pc_to_emqx.py's publish_weather_if_changed() pattern.
         **(_weather_snap if (_weather_snap is not None
                              and _weather_snap != _USB_WEATHER_SENT) else {}),

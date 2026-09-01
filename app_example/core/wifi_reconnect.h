@@ -30,8 +30,8 @@ void wifi_join_status_event_hdl(u8* evt_info);
 
 /* Retry state — shared with MQTT task and UI timer */
 extern volatile bool g_wifi_retry_exhausted;
-extern volatile int  g_wifi_retry_current;  /* rtw_reconn.cnt */
-extern volatile int  g_wifi_retry_max;      /* wifi_user_config.auto_reconnect_count */
+extern volatile int  g_wifi_retry_current; /* rtw_reconn.cnt */
+extern volatile int  g_wifi_retry_max;     /* wifi_user_config.auto_reconnect_count */
 
 /* Called from MQTT park loop / LVGL timer to detect SDK reconnect status */
 void wifi_retry_periodic_check(void);

@@ -208,6 +208,13 @@ void cpu_particle_timer_cb(lv_timer_t* timer);
     /* Fast flash tick for threshold alert (~150ms, independent of 1Hz data timer) */
     void fast_flash_tick(void);
 
+    /* Sedentary reminder — corner flash management */
+    void sedentary_flash_tick(void);
+    void sedentary_flash_create(void);
+    void sedentary_flash_destroy(void);
+    void sedentary_flash_raise(void);
+    void sedentary_flash_recolor(void);
+
 #ifdef __cplusplus
 }
 #endif

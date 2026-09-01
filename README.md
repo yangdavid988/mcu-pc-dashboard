@@ -95,6 +95,7 @@ Two mutually exclusive data paths, selected at compile time:
 - ✅ **Standby mode** — analogue clock display when PC is locked, with sweep hand animation on time acquisition. Standby Manager orchestrates MQTT-to-LVGL task transition. Auto-dims backlight in standby.
 - ✅ **PWM backlight control** — GPIO buttons for brightness adjustment (short press ±10%, long press jumps to min/max). OSD popup shows current percentage. Auto-dims to 20% in standby.
 - ✅ **Configurable flash threshold system** — card borders and progress bars blink when values exceed warning levels. Thresholds configured in `threshold_config.h`.
+- ✅ **Sedentary reminder** — when the PC stays unlocked for longer than the configured timeout, a smooth breathing red edge-glow appears around the screen borders to remind the user to take a break. Implemented with 4 lightweight gradient strips for minimal render cost.
 
 ---
 ### 📡 Dual-Mode Architecture: USB CDC vs. MQTT
@@ -436,6 +437,18 @@ Six alert categories are supported: CPU usage, CPU temperature, RAM, disk, GPU, 
 
 ---
 
+#### 🪑 Sedentary Reminder
+
+When the PC stays in **Monitor mode** for longer than the configured timeout (without locking), the screen borders glow with a **smooth breathing red edge** to gently remind the user to stand up and stretch:
+
+- **Breathing animation** — 24-step sin² curve (200ms/step, 4.8s cycle), 51% peak opacity, uniform and seamless
+- **Lightweight rendering** — 4 independent gradient strips (~61K px total dirty area), ~30ms per step, no impact on dashboard smoothness
+- **Automatic start/stop** — timer resets on lock/unlock events (standby manager); triggers when timeout is exceeded in Monitor mode, stops when the PC is locked
+- **Consistent across layouts/themes** — raised to front after layout switch; works with all COBALT / INFERNO / SILICON themes
+- **Timeline** — Enter Monitor → timer resets → exceed `SEDENTARY_REMINDER_TIMEOUT_MIN` → edge-glow breathes for `SEDENTARY_FLASH_ON_SEC` of every `SEDENTARY_FLASH_CYCLE_SEC` cycle until the PC is locked
+
+---
+
 
 ### 💻 PC Collector
 
@@ -586,6 +599,9 @@ Edit `app_example/config/threshold_config.h`:
 | `BL_MIN_PCT` | ST7262/DBL070: 10%, T1720A: 2% | Backlight hardware floor |
 | `BL_STEP_PCT` | 10% | Backlight step size |
 | `BRIGHTNESS_STANDBY_PCT` | ST7262/DBL070: 20%, T1720A: 3% | Standby backlight brightness |
+| `SEDENTARY_REMINDER_TIMEOUT_MIN` | 45 | Sedentary timeout (minutes), 0 = disabled |
+| `SEDENTARY_FLASH_ON_SEC` | 30 | Sedentary reminder duration (seconds) |
+| `SEDENTARY_FLASH_CYCLE_SEC` | 60 | Sedentary reminder cycle (seconds) |
 
 #### 📁 Other Configuration
 

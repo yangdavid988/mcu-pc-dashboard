@@ -25,7 +25,7 @@ config SCREEN_T1720A
 endchoice
 
 config USB_CDC_MODE
-    bool "USB CDC mode (ST7262 only, all data via USB cable)"
+    bool "USB CDC mode (ST7262 / T1720A, all data via USB cable)"
     default y
     depends on SCREEN_ST7262 || SCREEN_T1720A
     select USB_OTG_EN_MENU

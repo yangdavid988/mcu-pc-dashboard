@@ -288,6 +288,28 @@ static void destroy_waiting_ui(void)
  * ======================================================================== */
 
 /* ========================================================================
+ * monitor_entry() — single choke point for entering MONITOR mode.
+ *
+ * Creates the layout on the active screen, then creates the sedentary
+ * edge strips AFTER the layout so they are the newest siblings (LVGL
+ * z-order: newer siblings on top); raises them for safety against any
+ * widget added during layout creation (e.g. watermark), and initialises
+ * the sedentary timer on first entry.
+ *
+ * All MONITOR entry paths (unlock, first data, wifi-connected, timeout)
+ * call this so the strips are always created in the same z-order.
+ * ======================================================================== */
+static void monitor_entry(void)
+{
+    destroy_waiting_ui();
+    layout_switch(g_layout_id);
+    sedentary_flash_create();
+    sedentary_flash_raise();
+    if (g_sedentary_tick_reset == 0)
+        g_sedentary_tick_reset = rtos_time_get_current_system_time_ms();
+}
+
+/* ========================================================================
  * Build complete UI on data receipt (V3: uses layout_switch to create layout)
  * ======================================================================== */
 
@@ -329,6 +351,8 @@ void dashboard_timer_cb(lv_timer_t* timer)
     /* Transition: MONITOR → CLOCK */
     if (g_screen_state == SCREEN_STATE_CLOCK && !g_lock_screen_active)
     {
+        /* Destroy sedentary corner objects — not visible in clock mode */
+        sedentary_flash_destroy();
         RTK_LOGI("V3_UI", "lock event -> switching to clock standby\n");
         /* Use theme background only when coming from MONITOR on themes
          * that have a visible bg_image on the screen (A/B — Cobalt, Inferno).
@@ -378,12 +402,14 @@ void dashboard_timer_cb(lv_timer_t* timer)
          * container (LVGL z-order: newer siblings on top). Then fade
          * the monitor in from TRANSP→COVER so the clock beneath
          * appears to dissolve away. No move_foreground needed. */
+
         reset_mqtt_status_tracking();
         g_data_last_tick    = rtos_time_get_current_system_time_ms();
         g_timeout_triggered = false;
         notify_layout_switched();
-        destroy_waiting_ui();
-        layout_switch(g_layout_id);
+        monitor_entry();
+        /* Sedentary timer resets on the lock→unlock transition in
+         * standby_manager.c (user just unlocked → took a break). */
         start_unlock_transition();
         return;
     }
@@ -406,6 +432,42 @@ void dashboard_timer_cb(lv_timer_t* timer)
         update_layout_clock();
         update_mqtt_warning();
         update_weather_ui();
+    }
+
+    /* ==================================================================
+     * Sedentary reminder — timer check (MONITOR mode only).
+     * If threshold reached, toggle g_sedentary_flash_period within the
+     * SEDENTARY_FLASH_ON_SEC-on / SEDENTARY_FLASH_CYCLE_SEC duty cycle.
+     * Edge strips breathe via sedentary_flash_tick() on the fast_flash
+     * timer cadence.  See threshold_config.h for the duty-cycle values.
+     * ================================================================== */
+    {
+        uint32_t now = rtos_time_get_current_system_time_ms();
+
+        /* Initialise reset tick on first monitor entry — all other
+         * entries go through monitor_entry() which sets it explicitly. */
+        if (g_sedentary_tick_reset == 0)
+            g_sedentary_tick_reset = now;
+
+#if SEDENTARY_REMINDER_TIMEOUT_MIN > 0
+        uint32_t elapsed_min = (now - g_sedentary_tick_reset) / 60000;
+
+        if (elapsed_min >= SEDENTARY_REMINDER_TIMEOUT_MIN)
+        {
+            /* Threshold reached: determine where we are in the 60-second cycle */
+            uint32_t elapsed_after_threshold = (now - g_sedentary_tick_reset) -
+                                               (uint32_t) SEDENTARY_REMINDER_TIMEOUT_MIN * 60000;
+            uint32_t cycle_pos_ms = elapsed_after_threshold % ((uint32_t) SEDENTARY_FLASH_CYCLE_SEC * 1000);
+            g_sedentary_flash_period = (cycle_pos_ms < (uint32_t) SEDENTARY_FLASH_ON_SEC * 1000);
+        }
+        else
+        {
+            g_sedentary_flash_period = false;
+        }
+#else
+        /* SEDENTARY_REMINDER_TIMEOUT_MIN == 0: feature disabled */
+        g_sedentary_flash_period = false;
+#endif
     }
 
     /* ---- WiFi retry exhausted popup ---- */
@@ -509,8 +571,7 @@ void dashboard_timer_cb(lv_timer_t* timer)
         if (g_wifi_connected)
         {
             RTK_LOGI("V3_UI", "wifi connected -> create layout %s (no data)\n", layout_get_name(g_layout_id));
-            destroy_waiting_ui();
-            layout_switch(g_layout_id);
+            monitor_entry();
             /* Fall through to the update path below */
         }
         else
@@ -529,8 +590,7 @@ void dashboard_timer_cb(lv_timer_t* timer)
             {
                 RTK_LOGI("V3_UI", "timeout -> create layout %s (no data)\n", layout_get_name(g_layout_id));
                 wait_ticks = 0;
-                destroy_waiting_ui();
-                layout_switch(g_layout_id);
+                monitor_entry();
             }
             /* else: wait_ticks < 5, pc-event received — fall through to data path */;
         }
@@ -572,8 +632,7 @@ void dashboard_timer_cb(lv_timer_t* timer)
     if (!layout_is_created())
     {
         RTK_LOGI("V3_UI", "first data -> create layout %s\n", layout_get_name(g_layout_id));
-        destroy_waiting_ui();
-        layout_switch(g_layout_id);
+        monitor_entry();
 
         /* Fall through to update_current_layout() with fresh data */
     }
