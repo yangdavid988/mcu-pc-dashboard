@@ -221,6 +221,13 @@ static void start_switch(void)
     }
     theme_watermark_update();
     notify_layout_switched();
+    /* Raise sedentary edge strips above newly-created layout widgets.
+     * This is safe even if strips haven't been created yet (create
+     * time is during first MONITOR entry, not at boot).            */
+    sedentary_flash_raise();
+    /* Recolor the strips to the newly-active theme's warn colour so the
+     * glow follows the theme instead of keeping the create-time colour. */
+    sedentary_flash_recolor();
     g_switching = false;
 }
 

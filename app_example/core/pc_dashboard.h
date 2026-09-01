@@ -209,6 +209,14 @@ extern volatile bool          g_pc_event_received;  /* true once first pc/event 
 extern volatile bool          g_wifi_connected;     /* MQTT mode: true after WiFi + DHCP succeeds */
 extern volatile bool          g_wifi_retry_exhausted; /* MQTT mode: true when WiFi retries exhausted */
 
+/* ========================================================================
+ * Sedentary reminder — corner flash alert
+ * ======================================================================== */
+/** System tick (ms) when the sedentary timer was last reset (on lock/unlock) */
+extern volatile uint32_t g_sedentary_tick_reset;
+/** True when within the 5-second flash window of the 60-second duty cycle */
+extern volatile bool     g_sedentary_flash_period;
+
 /* Redefine mqtt_printf with MQTT_INFO threshold (suppress DEBUG, keep INFO+).
  * MUST come after #include "MQTTClient.h" (line 14) — clean #undef + new
  * #define, no redefinition warning. SDK MQTTClient.c logs are suppressed

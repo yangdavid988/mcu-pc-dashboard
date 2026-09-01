@@ -40,6 +40,9 @@ void standby_enter(void)
     backlight_set_standby(true);
     gpio_control_suspend_ui_buttons();
 
+    /* Reset sedentary reminder timer — user took a break by locking */
+    g_sedentary_tick_reset = rtos_time_get_current_system_time_ms();
+
     RTK_LOGI(TAG, "Standby entered (backlight dim, GPIO IRQs suspended)\n");
 }
 
@@ -60,6 +63,9 @@ void standby_exit(void)
      * the LVGL fade-completion callback (pc_dashboard_lock_screen.c) to
      * avoid a bright clock-face flash before the fade-out transition. */
     gpio_control_resume_ui_buttons();
+
+    /* Reset sedentary reminder timer — user has moved (unlocked) */
+    g_sedentary_tick_reset = rtos_time_get_current_system_time_ms();
 
     RTK_LOGI(TAG, "Standby exited (GPIO IRQs resumed, backlight restore deferred)\n");
 }

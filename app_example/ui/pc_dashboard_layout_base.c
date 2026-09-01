@@ -234,6 +234,7 @@ bool s_first = true;
 
 /* Flag: reset fast_flash_tick() prev_*_over tracking on next call (set on layout switch) */
 bool g_reset_flash_prev = false;
+
 /* ========================================================================
  * Layout switch helpers — reset state for clean layout/theme transition
  * ======================================================================== */
@@ -302,6 +303,7 @@ void notify_layout_switched(void)
             g_weather_updated = true;
     }
 }
+
 /* ========================================================================
  * Fast flash tick — called by a 150ms LVGL timer (independent of 1Hz updates)
  * Only toggles card borders when threshold is exceeded.
@@ -588,6 +590,251 @@ void fast_flash_tick(void)
     }
 }
 
+/* ========================================================================
+ * Sedentary reminder — 4-edge breathing glow strips
+ *
+ * Four independent gradient strips (top, bottom, left, right) that
+ * breathe ON/OFF with a smooth opacity gradient, creating a natural
+ * "inward red glow" feel when the sedentary timeout is reached.
+ *
+ * Each strip is a small independent lv_obj (~20K px dirty area vs 384K
+ * for full-screen), so each opacity change renders in ~30ms total vs
+ * ~1.5s for the old full-screen overlay.
+ *
+ * The gradient goes warn→black from outer edge toward center, giving a
+ * receding red glow.  When hidden, strips are completely skipped by
+ * LVGL rendering (no cost).
+ *
+ * Breathing profile (24 steps × 200ms = 4.8s cycle, sin² opacity curve):
+ *   24 unique opa values → 24 renders × ~30ms ≈ ~720ms per cycle (~15% CPU)
+ *   Step 23 (opa 0) hides the strips, which LVGL then renders nothing for.
+ *
+ * Corner overlap: left/right strips run full height (480px), top/bottom
+ * run full width (800px).  At each corner, two perpendicular strips
+ * alpha-blend → brighter corner glow → continuous ring with no gaps.
+ * ======================================================================== */
+
+/** Strip width in pixels from each screen edge */
+#define SEDENTARY_STRIP_W 24
+
+/** Strip objects (NULL when not created) */
+static lv_obj_t* s_strip_top   = NULL;
+static lv_obj_t* s_strip_bot   = NULL;
+static lv_obj_t* s_strip_left  = NULL;
+static lv_obj_t* s_strip_right = NULL;
+
+/* -----------------------------------------------------------------------
+ * Breathing opa sequence (0-255 scale) — sin² curve.
+ * All 24 steps are unique → 24 renders × ~30ms = ~720ms per cycle (15% CPU).
+ * Combined with other tasks (~35%) → total ~50% CPU, matching the user's
+ * measurement.  Peak opa 130/255 = 51% gives vivid red at maximum inhale.
+ * ----------------------------------------------------------------------- */
+#define SEDENTARY_BREATH_STEPS   24
+#define SEDENTARY_BREATH_STEP_MS 200 /* 200ms × 24 = 4.8s cycle */
+static const uint8_t s_breath_opa[SEDENTARY_BREATH_STEPS] = {
+    5, 7, 13, 23, 36, 51, 67, 83, 98, 111, 121, 127, 130, 127, 121, 111, 98, 83, 67, 51, 36, 23, 13, 0
+};
+
+/* -----------------------------------------------------------------------
+ * Helper: create one edge strip with warn→black gradient.
+ *  bg          = warn colour at outer edge
+ *  grad        = black at inner edge
+ *  dir         = gradient direction (VER for top/bot, HOR for left/right)
+ * ----------------------------------------------------------------------- */
+static lv_obj_t* create_strip(lv_obj_t* parent, int x, int y, int w, int h, lv_color_t bg, lv_color_t grad, lv_grad_dir_t dir)
+{
+    lv_obj_t* obj = lv_obj_create(parent);
+    lv_obj_set_pos(obj, x, y);
+    lv_obj_set_size(obj, w, h);
+    lv_obj_set_style_radius(obj, 0, 0);
+    lv_obj_set_style_border_width(obj, 0, 0);
+    lv_obj_set_style_pad_all(obj, 0, 0);
+    lv_obj_set_style_bg_color(obj, bg, 0);
+    lv_obj_set_style_bg_grad_color(obj, grad, 0);
+    lv_obj_set_style_bg_grad_dir(obj, dir, 0);
+    lv_obj_set_style_bg_opa(obj, LV_OPA_60, 0);
+    lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+    return obj;
+}
+
+/* -----------------------------------------------------------------------
+ * Recolor: re-apply the current theme's warn colour to the four strips.
+ * Called on theme switch (see pc_dashboard_theme.c) so the glow follows
+ * the active theme instead of keeping the colour from create time.
+ * ----------------------------------------------------------------------- */
+void sedentary_flash_recolor(void)
+{
+    if (s_strip_top == NULL)
+        return;
+
+    lv_color_t warn = g_themes[g_theme_id].warn;
+    lv_color_t blk  = lv_color_make(0, 0, 0);
+
+    /* Same gradient arrangement as sedentary_flash_create():
+     * top/left = warn→black, bottom/right = black→warn */
+    lv_obj_set_style_bg_color(s_strip_top, warn, 0);
+    lv_obj_set_style_bg_grad_color(s_strip_top, blk, 0);
+    lv_obj_set_style_bg_color(s_strip_bot, blk, 0);
+    lv_obj_set_style_bg_grad_color(s_strip_bot, warn, 0);
+    lv_obj_set_style_bg_color(s_strip_left, warn, 0);
+    lv_obj_set_style_bg_grad_color(s_strip_left, blk, 0);
+    lv_obj_set_style_bg_color(s_strip_right, blk, 0);
+    lv_obj_set_style_bg_grad_color(s_strip_right, warn, 0);
+}
+
+void sedentary_flash_create(void)
+{
+    if (s_strip_top != NULL)
+        return;
+
+    lv_obj_t*      scr  = lv_scr_act();
+    const theme_t* th   = &g_themes[g_theme_id];
+    lv_color_t     warn = th->warn;
+    lv_color_t     blk  = lv_color_make(0, 0, 0);
+
+    /* Top strip:   800×24,  pos(0,0),                  warn→black VER */
+    s_strip_top = create_strip(scr, 0, 0, SCREEN_WIDTH, SEDENTARY_STRIP_W, warn, blk, LV_GRAD_DIR_VER);
+    /* Bottom strip: 800×24,  pos(0,480-24),            black→warn VER */
+    s_strip_bot = create_strip(scr, 0, SCREEN_HEIGHT - SEDENTARY_STRIP_W, SCREEN_WIDTH, SEDENTARY_STRIP_W, blk, warn, LV_GRAD_DIR_VER);
+    /* Left strip:  24×480,  pos(0,0),                  warn→black HOR
+     * Full height so it overlaps top/bottom at corners.   */
+    s_strip_left = create_strip(scr, 0, 0, SEDENTARY_STRIP_W, SCREEN_HEIGHT, warn, blk, LV_GRAD_DIR_HOR);
+    /* Right strip: 24×480,  pos(800-24,0),              black→warn HOR */
+    s_strip_right = create_strip(scr, SCREEN_WIDTH - SEDENTARY_STRIP_W, 0, SEDENTARY_STRIP_W, SCREEN_HEIGHT, blk, warn, LV_GRAD_DIR_HOR);
+
+    /* Raise to foreground once during creation */
+    lv_obj_move_foreground(s_strip_top);
+    lv_obj_move_foreground(s_strip_bot);
+    lv_obj_move_foreground(s_strip_left);
+    lv_obj_move_foreground(s_strip_right);
+
+    RTK_LOGI(TAG, "sedentary: 4-strip breathing created\n");
+}
+
+void sedentary_flash_raise(void)
+{
+    if (s_strip_top)
+        lv_obj_move_foreground(s_strip_top);
+    if (s_strip_bot)
+        lv_obj_move_foreground(s_strip_bot);
+    if (s_strip_left)
+        lv_obj_move_foreground(s_strip_left);
+    if (s_strip_right)
+        lv_obj_move_foreground(s_strip_right);
+}
+
+void sedentary_flash_destroy(void)
+{
+    if (s_strip_top)
+    {
+        lv_obj_delete(s_strip_top);
+        s_strip_top = NULL;
+        lv_obj_delete(s_strip_bot);
+        s_strip_bot = NULL;
+        lv_obj_delete(s_strip_left);
+        s_strip_left = NULL;
+        lv_obj_delete(s_strip_right);
+        s_strip_right = NULL;
+    }
+}
+
+/* -----------------------------------------------------------------------
+ * Helper: set background opacity on all four strips.
+ *  opa=0 → also apply HIDDEN to avoid wasteful transparent rendering.
+ * ----------------------------------------------------------------------- */
+static void strip_set_opa(uint8_t opa, bool hidden)
+{
+    if (hidden)
+    {
+        lv_obj_add_flag(s_strip_top, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_strip_bot, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_strip_left, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_strip_right, LV_OBJ_FLAG_HIDDEN);
+    }
+    else
+    {
+        lv_obj_set_style_bg_opa(s_strip_top, opa, 0);
+        lv_obj_set_style_bg_opa(s_strip_bot, opa, 0);
+        lv_obj_set_style_bg_opa(s_strip_left, opa, 0);
+        lv_obj_set_style_bg_opa(s_strip_right, opa, 0);
+        lv_obj_clear_flag(s_strip_top, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_strip_bot, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_strip_left, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_strip_right, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void sedentary_flash_tick(void)
+{
+    static uint32_t s_step_start; /* System ms when current breath cycle began */
+    static int      s_last_step;  /* Last-exectued step index (-1 = none)      */
+    static uint8_t  s_last_opa;   /* Last applied opa (0 = hidden)             */
+    static bool     s_hidden;     /* Strips currently hidden?                   */
+
+    /* Not in flash period → ensure hidden & reset state */
+    if (!g_sedentary_flash_period)
+    {
+        if (!s_hidden && s_strip_top)
+        {
+            lv_obj_add_flag(s_strip_top, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_strip_bot, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_strip_left, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_strip_right, LV_OBJ_FLAG_HIDDEN);
+        }
+        s_step_start = 0;
+        s_last_step  = -1;
+        s_hidden     = true;
+        return;
+    }
+
+    if (!s_strip_top)
+        return;
+
+    uint32_t now = rtos_time_get_current_system_time_ms();
+
+    /* First tick → start breathing cycle */
+    if (s_step_start == 0)
+    {
+        s_step_start = now;
+        s_last_step  = -1;
+        s_hidden     = true;
+    }
+
+    /* Determine current step from elapsed wall time */
+    uint32_t elapsed = now - s_step_start;
+    int      step    = (int) (elapsed / SEDENTARY_BREATH_STEP_MS);
+
+    /* Wrap around if past end of cycle */
+    if (step >= SEDENTARY_BREATH_STEPS)
+    {
+        s_step_start = now; /* Restart cycle (no flicker — all strips
+                             * are already hidden by the last exhale) */
+        s_last_step = -1;
+        s_hidden    = true;
+        step        = 0;
+    }
+
+    /* No step change since last tick → skip (0 render) */
+    if (step == s_last_step)
+        return;
+    s_last_step = step;
+
+    /* ============ Look up opa from breathing table ============ */
+    uint8_t opa       = s_breath_opa[step];
+    bool    want_hide = (opa == 0);
+
+    /* Skip if already in desired state — no render */
+    if (want_hide && s_hidden)
+        return;
+    if (!want_hide && opa == s_last_opa)
+        return;
+
+    s_last_opa = opa;
+    s_hidden   = want_hide;
+    strip_set_opa(opa, want_hide);
+}
+
 void set_layout_container(lv_obj_t* cont)
 {
     g_layout_container = cont;
@@ -607,115 +854,115 @@ static void null_widget_pointers_for_id(layout_id_t id)
 {
     switch (id)
     {
-            case LAYOUT_TRIAD:
-                tr_cpu_bar      = NULL;
-                tr_cpu_val      = NULL;
-                tr_cpu_freq     = NULL;
-                tr_cpu_temp     = NULL;
-                tr_ram_bar      = NULL;
-                tr_ram_val      = NULL;
-                tr_ram_swap     = NULL;
-                tr_ram_swap2    = NULL;
-                tr_dsk_bar      = NULL;
-                tr_dsk_val      = NULL;
-                tr_dsk_io       = NULL;
-                tr_bat_bar      = NULL;
-                tr_bat_val      = NULL;
-                tr_bat_sts      = NULL;
-                tr_gpu_bar      = NULL;
-                tr_gpu_val      = NULL;
-                tr_gpu_name     = NULL;
-                tr_gpu_tm       = NULL;
-                tr_io_read      = NULL;
-                tr_io_write     = NULL;
-                tr_net_tx       = NULL;
-                tr_net_rx       = NULL;
-                tr_sys_p        = NULL;
-                tr_sys_c        = NULL;
-                tr_sys_b        = NULL;
-                tr_sys_h        = NULL;
-                tr_sys_o        = NULL;
-                tr_env_t        = NULL;
-                tr_env_h        = NULL;
-                tr_weather_info = NULL;
-                tr_weather_icon = NULL;
-                tr_weather_main = NULL;
-                tr_weather_city = NULL;
-                tr_time         = NULL;
-                tr_user         = NULL;
-                tr_bat_icon     = NULL;
-                tr_warn_lbl     = NULL;
-                tr_warn_icon    = NULL;
-                break;
-            case LAYOUT_VORTEX:
-                vo_cpu_freq     = NULL;
-                vo_cpu_temp     = NULL;
-                vo_cpu_canvas   = NULL;
-                s_cpu_canvas_draw_buf = NULL;
-                vo_ram_bar      = NULL;
-                vo_ram_val      = NULL;
-                vo_ram_swap     = NULL;
-                vo_ram_swap2    = NULL;
-                vo_dsk_bar      = NULL;
-                vo_dsk_val      = NULL;
-                vo_dsk_io       = NULL;
-                vo_bat_bar      = NULL;
-                vo_bat_val      = NULL;
-                vo_bat_sts      = NULL;
-                vo_bat_icon     = NULL;
-                vo_gpu_bar      = NULL;
-                vo_gpu_val      = NULL;
-                vo_gpu_name     = NULL;
-                vo_gpu_tm       = NULL;
-                vo_net_tx       = NULL;
-                vo_net_rx       = NULL;
-                vo_sys_p        = NULL;
-                vo_sys_c        = NULL;
-                vo_sys_b        = NULL;
-                vo_sys_h        = NULL;
-                vo_sys_o        = NULL;
-                vo_env_t        = NULL;
-                vo_env_h        = NULL;
-                vo_weather_info = NULL;
-                vo_weather_icon = NULL;
-                vo_weather_main = NULL;
-                vo_weather_city = NULL;
-                vo_time         = NULL;
-                vo_user         = NULL;
-                vo_warn_lbl     = NULL;
-                vo_warn_icon    = NULL;
-                break;
-            case LAYOUT_PULSE:
-                pu_cpu_val      = NULL;
-                pu_cpu_sub      = NULL;
-                pu_cpu_temp     = NULL;
-                pu_ram_val      = NULL;
-                pu_ram_sub      = NULL;
-                pu_ram_swap2    = NULL;
-                pu_dsk_val      = NULL;
-                pu_dsk_sub      = NULL;
-                pu_bat_val      = NULL;
-                pu_bat_sub      = NULL;
-                pu_gpu_val      = NULL;
-                pu_gpu_sub      = NULL;
-                pu_net_sub      = NULL;
-                pu_sys_p        = NULL;
-                pu_sys_c        = NULL;
-                pu_sys_b        = NULL;
-                pu_sys_o        = NULL;
-                pu_env_t        = NULL;
-                pu_env_h        = NULL;
-                pu_weather_info = NULL;
-                pu_weather_icon = NULL;
-                pu_weather_main = NULL;
-                pu_weather_city = NULL;
-                pu_time         = NULL;
-                pu_user         = NULL;
-                pu_warn_lbl     = NULL;
-                pu_warn_icon    = NULL;
-                break;
-            default:
-                break;
+        case LAYOUT_TRIAD:
+            tr_cpu_bar      = NULL;
+            tr_cpu_val      = NULL;
+            tr_cpu_freq     = NULL;
+            tr_cpu_temp     = NULL;
+            tr_ram_bar      = NULL;
+            tr_ram_val      = NULL;
+            tr_ram_swap     = NULL;
+            tr_ram_swap2    = NULL;
+            tr_dsk_bar      = NULL;
+            tr_dsk_val      = NULL;
+            tr_dsk_io       = NULL;
+            tr_bat_bar      = NULL;
+            tr_bat_val      = NULL;
+            tr_bat_sts      = NULL;
+            tr_gpu_bar      = NULL;
+            tr_gpu_val      = NULL;
+            tr_gpu_name     = NULL;
+            tr_gpu_tm       = NULL;
+            tr_io_read      = NULL;
+            tr_io_write     = NULL;
+            tr_net_tx       = NULL;
+            tr_net_rx       = NULL;
+            tr_sys_p        = NULL;
+            tr_sys_c        = NULL;
+            tr_sys_b        = NULL;
+            tr_sys_h        = NULL;
+            tr_sys_o        = NULL;
+            tr_env_t        = NULL;
+            tr_env_h        = NULL;
+            tr_weather_info = NULL;
+            tr_weather_icon = NULL;
+            tr_weather_main = NULL;
+            tr_weather_city = NULL;
+            tr_time         = NULL;
+            tr_user         = NULL;
+            tr_bat_icon     = NULL;
+            tr_warn_lbl     = NULL;
+            tr_warn_icon    = NULL;
+            break;
+        case LAYOUT_VORTEX:
+            vo_cpu_freq           = NULL;
+            vo_cpu_temp           = NULL;
+            vo_cpu_canvas         = NULL;
+            s_cpu_canvas_draw_buf = NULL;
+            vo_ram_bar            = NULL;
+            vo_ram_val            = NULL;
+            vo_ram_swap           = NULL;
+            vo_ram_swap2          = NULL;
+            vo_dsk_bar            = NULL;
+            vo_dsk_val            = NULL;
+            vo_dsk_io             = NULL;
+            vo_bat_bar            = NULL;
+            vo_bat_val            = NULL;
+            vo_bat_sts            = NULL;
+            vo_bat_icon           = NULL;
+            vo_gpu_bar            = NULL;
+            vo_gpu_val            = NULL;
+            vo_gpu_name           = NULL;
+            vo_gpu_tm             = NULL;
+            vo_net_tx             = NULL;
+            vo_net_rx             = NULL;
+            vo_sys_p              = NULL;
+            vo_sys_c              = NULL;
+            vo_sys_b              = NULL;
+            vo_sys_h              = NULL;
+            vo_sys_o              = NULL;
+            vo_env_t              = NULL;
+            vo_env_h              = NULL;
+            vo_weather_info       = NULL;
+            vo_weather_icon       = NULL;
+            vo_weather_main       = NULL;
+            vo_weather_city       = NULL;
+            vo_time               = NULL;
+            vo_user               = NULL;
+            vo_warn_lbl           = NULL;
+            vo_warn_icon          = NULL;
+            break;
+        case LAYOUT_PULSE:
+            pu_cpu_val      = NULL;
+            pu_cpu_sub      = NULL;
+            pu_cpu_temp     = NULL;
+            pu_ram_val      = NULL;
+            pu_ram_sub      = NULL;
+            pu_ram_swap2    = NULL;
+            pu_dsk_val      = NULL;
+            pu_dsk_sub      = NULL;
+            pu_bat_val      = NULL;
+            pu_bat_sub      = NULL;
+            pu_gpu_val      = NULL;
+            pu_gpu_sub      = NULL;
+            pu_net_sub      = NULL;
+            pu_sys_p        = NULL;
+            pu_sys_c        = NULL;
+            pu_sys_b        = NULL;
+            pu_sys_o        = NULL;
+            pu_env_t        = NULL;
+            pu_env_h        = NULL;
+            pu_weather_info = NULL;
+            pu_weather_icon = NULL;
+            pu_weather_main = NULL;
+            pu_weather_city = NULL;
+            pu_time         = NULL;
+            pu_user         = NULL;
+            pu_warn_lbl     = NULL;
+            pu_warn_icon    = NULL;
+            break;
+        default:
+            break;
     }
 }
 
@@ -769,6 +1016,7 @@ bool layout_is_created(void)
     return (g_layout_id < LAYOUT_MAX &&
             g_layout_containers[g_layout_id] != NULL);
 }
+
 /* ========================================================================
  * Icon creation helper (image-based icons from img_icons/)
  * LVGL 9.3: use lv_image_create/lv_image_set_recolor (not style-based)
@@ -785,6 +1033,7 @@ lv_obj_t* create_icon_img(lv_obj_t* parent, const lv_img_dsc_t* icon, lv_color_t
     lv_obj_set_pos(img, x, y);
     return img;
 }
+
 /* ========================================================================
  * Color interpolation — heat (0–100%)
  * ========================================================================
@@ -889,6 +1138,7 @@ lv_color_t temp_color(float celsius)
 
     return lv_color_make(r, g, b);
 }
+
 /* ========================================================================
  * Layout constants (matching V2 dimensions)
  * ======================================================================== */
@@ -945,6 +1195,7 @@ void update_clock_v3(lv_obj_t* time_label)
                           (int) mi,
                           (int) s);
 }
+
 /* ========================================================================
  * CPU circle particle rendering (Vortex layout)
  * ======================================================================== */
@@ -1141,7 +1392,7 @@ static void update_particles(int h)
 /** Render CPU circle — restore baseline, draw water/particles/text on top */
 static void render_cpu_canvas_particles(int pct)
 {
-    int32_t const  w = 140, h = 140, cx = 70, cy = 70, radius = 68;
+    int32_t const w = 140, h = 140, cx = 70, cy = 70, radius = 68;
 
     /* Defensive: guard against detached/destroyed canvas */
     if (!vo_cpu_canvas)
@@ -1150,10 +1401,10 @@ static void render_cpu_canvas_particles(int pct)
     if (!dbuf || !dbuf->data)
         return;
 
-    int            pctc   = (pct < 0) ? 0 : ((pct > 100) ? 100 : pct);
-    lv_color_t     accent = heat_color((float) pctc);
-    lv_color32_t*  px     = (lv_color32_t*) dbuf->data;
-    int            wl     = (h * (100 - pctc)) / 100;
+    int           pctc   = (pct < 0) ? 0 : ((pct > 100) ? 100 : pct);
+    lv_color_t    accent = heat_color((float) pctc);
+    lv_color32_t* px     = (lv_color32_t*) dbuf->data;
+    int           wl     = (h * (100 - pctc)) / 100;
 
     /* Vertical gradient precalc (for edge seal + first baseline generation) */
     int32_t const cp_y0 = 16, cp_h = 376;
@@ -1281,6 +1532,7 @@ void cpu_particle_timer_cb(lv_timer_t* timer)
     update_particles(140);
     render_cpu_canvas_particles((int) (s_current_pct + 0.5f));
 }
+
 /* ========================================================================
  * V3 update dispatch — called by update_dashboard_ui()
  * ======================================================================== */
@@ -1355,6 +1607,7 @@ void update_current_layout(void)
     }
     g_sht3x_pending = false; /* env bar updated by layout refresh */
 }
+
 /* ========================================================================
  * V3 clock update — called from dashboard_timer_cb() each second
  * ======================================================================== */
@@ -1375,6 +1628,7 @@ void update_layout_clock(void)
             break;
     }
 }
+
 /* ========================================================================
  * Weather icon lookup — maps OpenWeatherMap main group to the matching
  * 32×32 A8 icon. Falls back to sun icon for unknown conditions.
@@ -1413,6 +1667,7 @@ static const lv_image_dsc_t* get_weather_icon(const char* main)
         return &icon_cloud;
     return &icon_sun;
 }
+
 /* ========================================================================
  * Weather UI update — called from dashboard timer callback
  * Updates weather icon and labels independently of MQTT data flow.

@@ -20,7 +20,7 @@ typedef struct
  * ======================================================================== */
 
 /** Temperature change threshold (°C) — skip refresh if delta is smaller */
-#define SHT3X_THRESHOLD_TEMP_C   0.5f /* default: ±0.5°C */
+#define SHT3X_THRESHOLD_TEMP_C 0.5f /* default: ±0.5°C */
 
 /** Humidity change threshold (%RH) — skip refresh if delta is smaller */
 #define SHT3X_THRESHOLD_HUMI_PCT 5.0f /* default: ±5 %RH */
@@ -31,7 +31,7 @@ typedef struct
 
 /** LVGL timer interval (ms).  Clock ticks every second; data widgets
  *  refresh only on new JSON arrival (driven by g_new_data_ready).        */
-#define UI_UPDATE_INTERVAL_MS       1000
+#define UI_UPDATE_INTERVAL_MS 1000
 
 /* ========================================================================
  * Connection data freshness timeout
@@ -44,7 +44,7 @@ typedef struct
  * the timeout and triggers an immediate disconnection.
  * ======================================================================== */
 
-#define CONNECTION_TIMEOUT_MS       12000  /* ms, ~4× the 3s MQTT publish interval */
+#define CONNECTION_TIMEOUT_MS 12000 /* ms, ~4× the 3s MQTT publish interval */
 
 /* ========================================================================
  * Backlight brightness control
@@ -55,11 +55,11 @@ typedef struct
 
 /** Standby brightness (0..100).  Panel-specific due to different remap curves. */
 #ifdef CONFIG_SCREEN_DBL070
-#define BRIGHTNESS_STANDBY_PCT 20   /* cubic: 20% → 0.8% duty → dimly visible */
+#define BRIGHTNESS_STANDBY_PCT 20 /* cubic: 20% → 0.8% duty → dimly visible */
 #elif defined(CONFIG_SCREEN_ST7262)
-#define BRIGHTNESS_STANDBY_PCT 3    /* quadratic: 3% → 0.09% duty */
+#define BRIGHTNESS_STANDBY_PCT 3 /* quadratic: 3% → 0.09% duty */
 #elif defined(CONFIG_SCREEN_T1720A)
-#define BRIGHTNESS_STANDBY_PCT 2    /* quadratic: 2% → 0.04% duty → barely visible */
+#define BRIGHTNESS_STANDBY_PCT 2 /* quadratic: 2% → 0.04% duty → barely visible */
 #endif
 
 /** Normal brightness (0..100).  100 = full brightness in monitor UI */
@@ -67,22 +67,46 @@ typedef struct
 
 /** Lowest allowed brightness (%) — hard floor. */
 #ifdef CONFIG_SCREEN_DBL070
-#define BL_MIN_PCT  10
+#define BL_MIN_PCT 10
 #elif defined(CONFIG_SCREEN_ST7262)
-#define BL_MIN_PCT  5
+#define BL_MIN_PCT 5
 #elif defined(CONFIG_SCREEN_T1720A)
-#define BL_MIN_PCT  2
+#define BL_MIN_PCT 2
 #endif
 
 /** Step size (%) for backlight_adjust(+/-) */
 #define BL_STEP_PCT 10
 
 /* ========================================================================
+ * Sedentary reminder — corner flash alert
+ *
+ * When the user stays in MONITOR mode without locking the PC for
+ * SEDENTARY_REMINDER_TIMEOUT_MIN minutes, a flash alert appears
+ * at the four screen corners to remind them to take a break.
+ *
+ * Flash pattern: on a SEDENTARY_FLASH_CYCLE_SEC-second cycle, the edge
+ * glow breathes for SEDENTARY_FLASH_ON_SEC seconds then rests for the
+ * remainder (default 30 s ON / 30 s OFF, a 50 % duty cycle).
+ *
+ * Timer resets whenever the PC is locked (standby_enter) or unlocked
+ * (standby_exit).  Set to 0 to disable the feature entirely.
+ * ======================================================================== */
+
+/** Sedentary reminder timeout in minutes (0 = disabled).  Default: 45 min. */
+#ifndef SEDENTARY_REMINDER_TIMEOUT_MIN
+#define SEDENTARY_REMINDER_TIMEOUT_MIN 45
+#endif
+
+/** Flash duty cycle: seconds ON per SEDENTARY_FLASH_CYCLE_SEC period */
+#define SEDENTARY_FLASH_ON_SEC    30
+#define SEDENTARY_FLASH_CYCLE_SEC 60
+
+/* ========================================================================
  * WiFi reconnect retry
  * ======================================================================== */
 
 /** Max consecutive Wi-Fi reconnection attempts before giving up */
-#define RETRY_LIMIT    10
+#define RETRY_LIMIT 10
 
 /** Delay between reconnection attempts (ms).  Combined with RETRY_LIMIT
  *  gives a max of ~50 s before the MCU stops retrying.                  */

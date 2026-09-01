@@ -15,6 +15,7 @@ Additional fields:
 import sys
 import os
 import subprocess
+import threading
 import platform
 import getpass
 import json
@@ -674,25 +675,17 @@ WEATHER_API_KEY = "YOUR_OPENWEATHERMAP_API_KEY"  # Get free key at https://openw
 WEATHER_LAT = 31.34               # Latitude  (e.g., Gusu District, Suzhou)
 WEATHER_LON = 120.61              # Longitude
 WEATHER_CITY_OVERRIDE = ""        # Optional: empty = use API-returned "name"
-WEATHER_ENABLED = False           # True = enable OpenWeatherMap API fetch (requires valid WEATHER_API_KEY)
+WEATHER_ENABLED = True            # True = enable OpenWeatherMap API fetch (requires valid WEATHER_API_KEY)
 
-def get_weather():
-    """
-    Fetch current weather from OpenWeatherMap API via coordinate query (lat/lon).
-    Cached for _WEATHER_CACHE_TTL seconds (600s = 10 min).
-    City name is auto-detected from API response; override via WEATHER_CITY_OVERRIDE.
-    Returns a dict or None on failure.
+# Weather is fetched by a dedicated daemon thread so the blocking HTTP
+# request (urllib timeout=10) never stalls the 3s publish hot path.
+_WEATHER_FETCH_LOCK = threading.Lock()
+
+def _weather_fetch_once():
+    """Fetch weather from OpenWeatherMap once and update the cache.
+    Runs in the dedicated weather thread; only touch _WEATHER_CACHE here.
     """
     global _WEATHER_CACHE, _WEATHER_CACHE_TIME
-    now = time.time()
-
-    # Return cached data if still fresh
-    if _WEATHER_CACHE is not None and (now - _WEATHER_CACHE_TIME) < _WEATHER_CACHE_TTL:
-        return _WEATHER_CACHE
-
-    if not WEATHER_ENABLED:
-        return None
-
     try:
         import json
         import urllib.request
@@ -719,15 +712,52 @@ def get_weather():
             "city": city_name,
             "country": data["sys"]["country"],
         }
-        _WEATHER_CACHE_TIME = now
+        _WEATHER_CACHE_TIME = time.time()
         print(f"[WEATHER] Updated: {_WEATHER_CACHE['city']}, "
               f"{_WEATHER_CACHE['description']}, "
               f"{_WEATHER_CACHE['temp_c']:.1f}°C, "
               f"{_WEATHER_CACHE['humidity']}%")
-        return _WEATHER_CACHE
     except Exception as e:
         print(f"[WEATHER] Fetch failed: {e}")
+
+def _weather_fetch_loop():
+    """Background weather loop — never blocks the pub/sub hot path."""
+    while True:
+        time.sleep(_WEATHER_CACHE_TTL)
+        if WEATHER_ENABLED:
+            with _WEATHER_FETCH_LOCK:
+                _weather_fetch_once()
+
+def weather_fetch_start():
+    """Start the background weather thread (idempotent)."""
+    if not WEATHER_ENABLED:
+        return
+    t = threading.Thread(target=_weather_fetch_loop, daemon=True, name="weather-fetch")
+    t.start()
+
+def get_weather():
+    """
+    Return the latest cached weather, or trigger one initial fetch from the
+    caller if the cache is empty.  Cached for _WEATHER_CACHE_TTL seconds.
+    City name is auto-detected from API response; override via WEATHER_CITY_OVERRIDE.
+    Returns a dict or None when there is no cached weather yet.
+    """
+    now = time.time()
+    if _WEATHER_CACHE is not None and (now - _WEATHER_CACHE_TIME) < _WEATHER_CACHE_TTL:
         return _WEATHER_CACHE
+
+    if not WEATHER_ENABLED:
+        return None
+
+    # No cache yet: fetch synchronously ONCE so the very first publish
+    # includes weather immediately.  Subsequent refreshes happen in the
+    # background thread and never block the hot path.
+    with _WEATHER_FETCH_LOCK:
+        # Double-check while holding the lock (another thread may have just filled it)
+        if _WEATHER_CACHE is not None and (time.time() - _WEATHER_CACHE_TIME) < _WEATHER_CACHE_TTL:
+            return _WEATHER_CACHE
+        _weather_fetch_once()
+    return _WEATHER_CACHE
 
 
 def publish_weather_if_changed(client, weather):
@@ -949,6 +979,9 @@ def mqtt_loop():
     global _WEATHER_LAST_PUBLISHED
     # Create detector early so on_connect / main loop can use it
     detector = ScreenLockDetector()
+
+    # Start background weather fetch thread (idempotent, no-op if disabled)
+    weather_fetch_start()
 
     client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2, client_id=MQTT_CLIENT_ID)
     client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)

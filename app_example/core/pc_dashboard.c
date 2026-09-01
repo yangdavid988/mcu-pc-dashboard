@@ -42,6 +42,10 @@ volatile bool          g_pc_event_received    = false; /* first pc/event retaine
 volatile bool          g_wifi_connected       = false; /* MQTT mode: true after WiFi + DHCP succeeds */
 volatile bool          g_wifi_retry_exhausted = false; /* MQTT mode: true when WiFi retries exhausted */
 
+/* Sedentary reminder */
+volatile uint32_t g_sedentary_tick_reset  = 0;   /* 0 = uninitialised, will be set on first monitor entry */
+volatile bool     g_sedentary_flash_period = false;
+
 /* ========================================================================
  * cJSON helper — extract uint64_t from parsed JSON tree
  *

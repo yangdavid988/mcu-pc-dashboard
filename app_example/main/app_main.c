@@ -58,6 +58,7 @@ static void flash_timer_cb(lv_timer_t* timer)
 {
     LV_UNUSED(timer);
     fast_flash_tick();
+    sedentary_flash_tick();
 }
 
 /* LVGL display buffers (dual-buffer via lcd_get_fb_base) */
@@ -190,7 +191,7 @@ void app_example(void)
     }
 
 #ifdef CONFIG_USB_CDC_MODE
-    /* ===== USB CDC Mode (ST7262 only) =====
+    /* ===== USB CDC Mode (ST7262 / T1720A) =====
      * All data comes from the PC via USB cable: hardware stats, weather,
      * SHT3X (PC-forwared via MQTT), and lock events.
      * WiFi / MQTT / HTTP weather are bypassed — no network needed on MCU. */
