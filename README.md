@@ -345,8 +345,8 @@ python pc_to_emqx.py
 
 ```bash
 python ameba.py flash --p COMx \
-  --image boot.bin 0x08000000 0x8014000 \
-  --image app.bin 0x08014000 0x8200000
+  --image boot.bin 0x08000000 0x8040000 \
+  --image app.bin 0x08040000 0x083C0000
 python ameba.py monitor --port COMx --b 1500000
 ```
 
