@@ -19,6 +19,17 @@
 [![Last Commit](https://badgen.net/github/last-commit/yangdavid988/mcu-pc-dashboard)](https://github.com/yangdavid988/mcu-pc-dashboard)
 [![Status](https://img.shields.io/badge/status-updating-yellow)]()
 
+
+---
+<div align="center">
+
+<img src="mcu-pc-dashboard-touch.gif" width="100%" style="max-width:1365px"
+     alt="mcu-pc-dashboard-touch on the T1720A 800x480 panel">
+
+</div>
+
+---
+
 🚀 基于 **Ameba RTL8721F** MCU 的 PC 硬件资源实时监控器。通过 **USB CDC ACM 虚拟串口** 或 **MQTT 主题** 接收 PC 实时状态（CPU、GPU、内存、磁盘、网络），同时获取 SHT3X 温湿度和室外天气数据。在 **800×480 TFT** 屏幕上实时展示，UI 由 **LVGL 9.3** 驱动。
 
 支持三种屏幕模块：
@@ -33,14 +44,6 @@
 ---
 
 - 📄 [芯片与模块信息](https://aiot.realmcu.com/cn/home.html) | 🌿 [Gitee 镜像](https://gitee.com/yangdavid988/mcu-pc-dashboard)
-
----
-<div align="center">
-
-<img src="VORTEX-COBALT.jpg" width="100%" style="max-width:1365px"
-     alt="VORTEX 布局 - COBALT 主题">
-
-</div>
 
 ---
 

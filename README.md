@@ -19,6 +19,16 @@
 [![Last Commit](https://badgen.net/github/last-commit/yangdavid988/mcu-pc-dashboard)](https://github.com/yangdavid988/mcu-pc-dashboard)
 [![Status](https://img.shields.io/badge/status-updating-yellow)]()
 
+---
+<div align="center">
+
+<img src="mcu-pc-dashboard-touch.gif" width="100%" style="max-width:1365px"
+     alt="mcu-pc-dashboard-touch on the T1720A 800x480 panel">
+
+</div>
+
+---
+
 🚀 A PC hardware resource monitor that receives real-time system status (CPU, GPU, RAM, disk, network) from a Windows PC via **USB CDC ACM virtual serial port** or **MQTT topics** (`pc/stats`, `pc/event`, `pc/weather`), plus environmental data via MQTT (`humiture/measurement`) and outdoor weather via HTTP. Parses JSON on the **Ameba RTL8721F** microcontroller and drives an **800×480 TFT** color screen via **LVGL 9.3** with a real-time dashboard.
 
 Three display modules supported:
@@ -32,13 +42,6 @@ Two mutually exclusive data paths, selected at compile time:
 
 - 📄 [Chip & module info](https://aiot.realmcu.com/en/home.html) | 🌿 [Gitee mirror](https://gitee.com/yangdavid988/mcu-pc-dashboard)
 
----
-<div align="center">
-
-<img src="VORTEX-COBALT.jpg" width="100%" style="max-width:1365px"
-     alt="VORTEX layout in COBALT theme — CPU-centered HUD with particle animation">
-
-</div>
 
 ---
 
