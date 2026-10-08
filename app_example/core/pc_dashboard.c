@@ -165,6 +165,12 @@ void parse_pc_stats_json(const char* payload)
 
     cJSON* item;
 
+    /* True when this pc/stats payload itself carries SHT3X data (USB CDC mode).
+     * In MQTT mode SHT3X arrives on its own low-frequency topic, so the
+     * full-struct memcpy must preserve the existing values. */
+    const bool payload_has_sht3x =
+        (cJSON_GetObjectItem(root, "sht3x_temperature") != NULL);
+
 /* Helper: extract float field, optional (defaults to 0) */
 #define GET_FLOAT(key, field)                  \
     do                                         \
@@ -359,6 +365,14 @@ void parse_pc_stats_json(const char* payload)
 
     /* Atomic global update (disable interrupts to prevent LVGL thread from reading partial state) */
     taskENTER_CRITICAL();
+    if (!payload_has_sht3x)
+    {
+        /* MQTT mode: keep last-known SHT3X reading instead of zeroing it */
+        stats.sht3x_temperature   = g_pc_stats.sht3x_temperature;
+        stats.sht3x_temperature_f = g_pc_stats.sht3x_temperature_f;
+        stats.sht3x_humidity      = g_pc_stats.sht3x_humidity;
+        stats.sht3x_valid         = g_pc_stats.sht3x_valid;
+    }
     memcpy(&g_pc_stats, &stats, sizeof(PC_Stats_t));
     g_new_data_ready = true;
     g_data_last_tick = now_tick;
