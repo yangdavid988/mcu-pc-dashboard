@@ -6,7 +6,7 @@ Feature-aligned with pc_to_emqx.py (identical capabilities):
   - ensure_venv(): auto-restart inside project .venv
   - diag_log() + --log-file: diagnostic log to file
   - LHM timing diagnostics: slow Update detection + stale-cache fallback
-  - get_disk_io_percent(): psutil read_time/write_time delta (no more wmic deadlock)
+  - get_disk_io_percent(): real disk busy % via PDH ctypes (no more wmic deadlock)
   - GPU triple detection: nvidia-smi -> WMI COM -> wmic CLI
   - get_weather(): OpenWeatherMap fetch, embedded in USB stats JSON
 
@@ -471,7 +471,7 @@ def get_libre_hardware_monitor_data():
         _LHM_cache_time = now
         if _lhm_total_elapsed > 3.0:
             diag_log(f"[LHM-DIAG] Update completed in {_lhm_total_elapsed:.1f}s, {total} sensors")
-        print(f"[LHM] Update refreshed {total} sensor values")
+        # print(f"[LHM] Update refreshed {total} sensor values")
         return result
 
     except Exception as e:
@@ -622,55 +622,190 @@ def get_gpu_info():
     _gpu_info_cache = result
     return result
 
-# ---------- Disk I/O utilization (psutil delta, no wmic deadlock) ----------
+# ---------- Disk I/O utilization ----------
+# Windows: real busy % from PDH (same source as Performance Monitor) via ctypes.
+#          In-process, no subprocess, no WMI -- the WMI perf provider can hang 10+ s.
+# Linux:   psutil busy_time delta, the only platform where psutil exposes it.
+#
+# psutil read_time/write_time cannot be used on Windows: they are SECONDS with
+# 1 s resolution there (not ms), and perdisk=False sums busy time across disks.
 _disk_io_cache = None
 _disk_io_prev_time = 0.0
-_disk_io_prev_read_ms = 0
-_disk_io_prev_write_ms = 0
+_disk_io_prev_busy_ms = None      # Linux only
+_pdh_disk_query = None
+_pdh_failed = False
+
+
+class _PdhDiskUtil:
+    """Overall physical-disk busy % via PDH.
+
+    Samples every physical disk and keeps the busiest one -- summing busy times
+    across disks would exceed 100 %. Uses "% Idle Time" rather than "% Disk Time"
+    because the latter is derived from ReadTime+WriteTime and exceeds 100 % when
+    reads and writes overlap.
+    """
+
+    _COUNTER = r"\PhysicalDisk(*)\% Idle Time"
+    _MORE_DATA = 0x800007D2
+
+    def __init__(self):
+        import ctypes
+        import ctypes.wintypes as wt
+
+        self._ctypes = ctypes
+        self._wt = wt
+        self._pdh = ctypes.WinDLL("pdh.dll")
+
+        class PDH_FMT_COUNTERVALUE(ctypes.Structure):
+            class _U(ctypes.Union):
+                _fields_ = [
+                    ("longValue", wt.LONG),
+                    ("doubleValue", ctypes.c_double),
+                    ("largeValue", ctypes.c_longlong),
+                    ("AnsiStringValue", ctypes.c_char_p),
+                    ("WideStringValue", ctypes.c_wchar_p),
+                ]
+            _fields_ = [("CStatus", wt.DWORD), ("u", _U)]
+            _anonymous_ = ("u",)
+
+        class PDH_FMT_COUNTERVALUE_ITEM(ctypes.Structure):
+            _fields_ = [("szName", wt.LPWSTR), ("FmtValue", PDH_FMT_COUNTERVALUE)]
+
+        self._ITEM = PDH_FMT_COUNTERVALUE_ITEM
+
+        # ctypes defaults HANDLE to 32-bit and would truncate the query handle on x64.
+        fns = {
+            "PdhOpenQueryW": ([wt.LPCWSTR, ctypes.c_void_p,
+                               ctypes.POINTER(wt.HANDLE)], wt.DWORD),
+            "PdhAddEnglishCounterW": ([wt.HANDLE, wt.LPCWSTR, ctypes.c_void_p,
+                                       ctypes.POINTER(wt.HANDLE)], wt.DWORD),
+            "PdhCollectQueryData": ([wt.HANDLE], wt.DWORD),
+            "PdhGetFormattedCounterArrayW": ([wt.HANDLE, wt.DWORD,
+                                              ctypes.POINTER(wt.DWORD),
+                                              ctypes.POINTER(wt.DWORD),
+                                              ctypes.c_void_p], wt.DWORD),
+            "PdhCloseQuery": ([wt.HANDLE], wt.DWORD),
+        }
+        for name, (argtypes, restype) in fns.items():
+            fn = getattr(self._pdh, name)
+            fn.argtypes = argtypes
+            fn.restype = restype
+
+        self._query = wt.HANDLE()
+        self._counter = wt.HANDLE()
+        if self._pdh.PdhOpenQueryW(None, None, ctypes.byref(self._query)) != 0:
+            raise OSError("PdhOpenQuery failed")
+        if self._pdh.PdhAddEnglishCounterW(
+                self._query, self._COUNTER, None, ctypes.byref(self._counter)) != 0:
+            self._pdh.PdhCloseQuery(self._query)
+            raise OSError("PdhAddEnglishCounter failed")
+
+        # A rate counter needs two samples; without this the first sample is 100 %.
+        self._pdh.PdhCollectQueryData(self._query)
+        time.sleep(0.1)
+        self._pdh.PdhCollectQueryData(self._query)
+
+    def sample(self):
+        """Return busiest physical disk busy % (float), or None if unavailable."""
+        ctypes = self._ctypes
+        if self._pdh.PdhCollectQueryData(self._query) != 0:
+            return None
+
+        size = self._wt.DWORD(0)
+        count = self._wt.DWORD(0)
+        rc = self._pdh.PdhGetFormattedCounterArrayW(
+            self._counter, 0x00000200, ctypes.byref(size), ctypes.byref(count), None)
+        if rc != self._MORE_DATA or size.value == 0:
+            return None
+
+        buf = ctypes.create_string_buffer(size.value)
+        rc = self._pdh.PdhGetFormattedCounterArrayW(
+            self._counter, 0x00000200, ctypes.byref(size), ctypes.byref(count), buf)
+        if rc != 0:
+            return None
+
+        items = ctypes.cast(buf, ctypes.POINTER(self._ITEM))
+        busiest = 0.0
+        seen = False
+        for i in range(count.value):
+            if (items[i].szName or "") == "_Total":
+                continue
+            idle = items[i].FmtValue.doubleValue
+            if idle < 0.0:
+                continue
+            seen = True
+            if 100.0 - idle > busiest:
+                busiest = 100.0 - idle
+        if not seen:
+            return None
+        return round(max(0.0, min(100.0, busiest)), 1)
+
+    def close(self):
+        try:
+            self._pdh.PdhCloseQuery(self._query)
+        except Exception:
+            pass
 
 
 def get_disk_io_percent():
     """
-    Return disk I/O utilization percentage.
-    Windows: calculated from psutil.disk_io_counters() read_time/write_time deltas.
-             Pure Python local call, no external process, no timeout deadlock risk.
-    Linux:   Returns None (not yet implemented).
+    Return disk I/O utilization percentage (0-100), or None when unavailable.
+
+    Windows: real busy time from PDH, busiest physical disk wins.
+    Linux:   psutil busy_time delta across all disks.
+    Others:  None (no busy-time source).
     """
-    if platform.system() != 'Windows':
+    global _disk_io_cache, _disk_io_prev_time, _disk_io_prev_busy_ms
+    global _pdh_disk_query, _pdh_failed
+
+    system = platform.system()
+
+    # ---------- Windows: PDH ----------
+    if system == 'Windows':
+        if _pdh_failed:
+            return _disk_io_cache
+        if _pdh_disk_query is None:
+            try:
+                _pdh_disk_query = _PdhDiskUtil()
+            except Exception as e:
+                _pdh_failed = True
+                diag_log(f"[DISK-IO] PDH unavailable, falling back to N/A: {e}")
+                return _disk_io_cache
+            # First call only establishes the baseline window; a rate counter
+            # sampled with no elapsed time reports 100 %.
+            return _disk_io_cache
+
+        value = _pdh_disk_query.sample()
+        if value is not None:
+            _disk_io_cache = value
+        return _disk_io_cache
+
+    # ---------- Linux: psutil busy_time ----------
+    if not hasattr(psutil.disk_io_counters(perdisk=False, nowrap=True), "busy_time"):
         return None
 
-    global _disk_io_cache, _disk_io_prev_time
-    global _disk_io_prev_read_ms, _disk_io_prev_write_ms
-
-    now = time.time()
     try:
-        io = psutil.disk_io_counters()
-        read_ms = io.read_time
-        write_ms = io.write_time
+        io = psutil.disk_io_counters(perdisk=False, nowrap=True)
+        busy_ms = io.busy_time
     except Exception:
         return _disk_io_cache
 
-    # First call: initialise sampling baseline, return cached value (may be None)
-    if _disk_io_prev_time == 0.0:
+    now = time.time()
+    if _disk_io_prev_busy_ms is None:
         _disk_io_prev_time = now
-        _disk_io_prev_read_ms = read_ms
-        _disk_io_prev_write_ms = write_ms
+        _disk_io_prev_busy_ms = busy_ms
         return _disk_io_cache
 
     delta_wall_ms = (now - _disk_io_prev_time) * 1000.0
     if delta_wall_ms <= 0:
         return _disk_io_cache
 
-    delta_read = read_ms - _disk_io_prev_read_ms
-    delta_write = write_ms - _disk_io_prev_write_ms
-
+    delta_busy = busy_ms - _disk_io_prev_busy_ms
     _disk_io_prev_time = now
-    _disk_io_prev_read_ms = read_ms
-    _disk_io_prev_write_ms = write_ms
+    _disk_io_prev_busy_ms = busy_ms
 
-    # Read and write may overlap; take max as conservative busy-time estimate
-    delta_busy = max(delta_read, delta_write)
-    percent = min(100.0, round(delta_busy / delta_wall_ms * 100.0, 1))
+    # busy_time is summed across devices, so it can exceed wall time.
+    percent = max(0.0, min(100.0, round(delta_busy / delta_wall_ms * 100.0, 1)))
     _disk_io_cache = percent
     return percent
 

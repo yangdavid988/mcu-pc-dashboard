@@ -484,7 +484,7 @@ PC 锁屏时，仪表盘自动切换到模拟时钟界面：
 | 磁盘用量/百分比 | `psutil.disk_usage()` | `disk` |
 | GPU 用量/显存/温度 | LHM / `nvidia-smi` / `wmic` | `gpu_*` |
 | 网络速度 | `psutil.net_io_counters()`（差值） | `net_*_kbps` |
-| 磁盘 I/O 利用率 | `psutil.disk_io_counters()` | `disk_io_percent` |
+| 磁盘 I/O 利用率 | PDH `\PhysicalDisk(*)\% Idle Time`（Windows）/ `psutil` busy_time（Linux） | `disk_io_percent` |
 | 磁盘读写总量 | `psutil.disk_io_counters()` | `disk_read_bytes`, `disk_write_bytes` |
 | Swap 用量 | `psutil.swap_memory()` | `swap_*` |
 | 电池 | `psutil.sensors_battery()` | `battery_*` |
