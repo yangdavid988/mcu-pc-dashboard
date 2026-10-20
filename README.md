@@ -482,7 +482,7 @@ Both scripts collect the same set of metrics (see below). Weather data is bundle
 | Disk usage/percent | `psutil.disk_usage()` | `disk` |
 | GPU usage/memory/temp | LHM / `nvidia-smi` / `wmic` | `gpu_*` |
 | Network speed | `psutil.net_io_counters()` (delta) | `net_*_kbps` |
-| Disk I/O utilization | `psutil.disk_io_counters()` | `disk_io_percent` |
+| Disk I/O utilization | PDH `\PhysicalDisk(*)\% Idle Time` (Windows) / `psutil` busy_time (Linux) | `disk_io_percent` |
 | Disk read/write | `psutil.disk_io_counters()` | `disk_read_bytes`, `disk_write_bytes` |
 | Swap usage | `psutil.swap_memory()` | `swap_*` |
 | Battery | `psutil.sensors_battery()` | `battery_*` |
