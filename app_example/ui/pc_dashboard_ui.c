@@ -6,6 +6,7 @@
 #include "hal/backlight_ctrl.h"
 #include "hal/lcd/lcdc_core.h"
 #include "core/wifi_reconnect.h" /* g_wifi_retry_* */
+#include <time.h>
 // #include <math.h>
 
 /*
@@ -94,6 +95,43 @@ void reset_mqtt_status_tracking(void)
 /* ========================================================================
  * Helper functions
  * ======================================================================== */
+
+/* Re-anchor the clock base when SNTP corrects the system clock.
+ *
+ * g_time_base_ts is latched once per boot (every write site is "== 0"
+ * guarded), so the display otherwise counts on SysTick alone and the daily
+ * SNTP correction never reaches it.  time(NULL) and the anchor are both
+ * linear in the same tick, so their difference only jumps on an SNTP reply.
+ * Accept only times below the 32-bit tick wrap to skip gettod.c's underflow. */
+#define TIME_BASE_RESYNC_TOLERANCE_S  2
+#define TIME_BASE_RESYNC_MAX_VALID_S  4000000000
+
+static void time_base_resync_check(void)
+{
+    if (g_time_base_ts == 0)
+        return;
+
+    time_t sntp_now = time(NULL);
+    if (sntp_now <= 1700000000)
+        return; /* SNTP has never succeeded */
+
+    if ((uint64_t) sntp_now >= TIME_BASE_RESYNC_MAX_VALID_S)
+        return; /* tv_sec after the 32-bit tick wrap, not a real time */
+
+    uint32_t now_ms       = rtos_time_get_current_system_time_ms();
+    uint32_t elapsed_s    = (now_ms - g_time_base_ms) / 1000;
+    int32_t  predicted_ts = (int32_t) (g_time_base_ts + elapsed_s);
+    int32_t  diff         = (int32_t) sntp_now - predicted_ts;
+
+    if (diff > TIME_BASE_RESYNC_TOLERANCE_S || diff < -TIME_BASE_RESYNC_TOLERANCE_S)
+    {
+        taskENTER_CRITICAL();
+        g_time_base_ts = (uint32_t) sntp_now;
+        g_time_base_ms = now_ms;
+        taskEXIT_CRITICAL();
+        RTK_LOGI("V3_UI", "time base re-anchored from SNTP, %d s corrected\n", (int) diff);
+    }
+}
 
 /* Create a progress bar with glow effect */
 
@@ -332,6 +370,9 @@ void create_dashboard_ui(void)
 void dashboard_timer_cb(lv_timer_t* timer)
 {
     LV_UNUSED(timer);
+
+    /* Before any clock renderer reads the base on this tick. */
+    time_base_resync_check();
 
     /* ==================================================================
      * GPIO deferred processing — runs in ALL modes (monitor & clock).
