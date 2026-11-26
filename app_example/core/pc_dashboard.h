@@ -194,6 +194,11 @@ void pc_dashboard_task(void* parameters);
 void pc_dashboard_start(void);
 void pc_dashboard_stop(void);
 
+/* Start SNTP once (idempotent). MQTT mode only. */
+#ifndef CONFIG_USB_CDC_MODE
+void sntp_start_once(void);
+#endif
+
 /* Timestamp conversion */
 void unix_to_datetime(uint32_t timestamp,
                       uint16_t* year, uint8_t* month, uint8_t* day,

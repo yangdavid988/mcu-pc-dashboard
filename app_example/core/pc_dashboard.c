@@ -678,6 +678,22 @@ void pc_stats_reset_to_default(void)
  * ======================================================================== */
 #ifndef CONFIG_USB_CDC_MODE
 
+/* Start SNTP once.  Called on the first Wi-Fi connect and again on every
+ * recovery from retry exhaustion, which used to jump past the init and leave
+ * the device with no time source.  lwIP re-arms SNTP_UPDATE_DELAY after each
+ * accepted reply, so the 24h re-sync needs no timer of our own. */
+void sntp_start_once(void)
+{
+    if (sntp_enabled())
+        return;
+
+    sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    sntp_set_update_interval(86400000); /* re-sync every 24h (Realtek wrapper) */
+    sntp_setservername(0, "ntp.aliyun.com");
+    sntp_init();
+    RTK_LOGI(TAG, "SNTP initialized (server: ntp.aliyun.com)\n");
+}
+
 /* ========================================================================
  * MQTT main task
  * ======================================================================== */
@@ -717,11 +733,7 @@ void pc_dashboard_task(void* parameters)
     RTK_LOGI(TAG, "Wi-Fi connected.\n");
 
     /* ---- Initialize SNTP for time sync (fallback when no PC data) ---- */
-    /* NOTE: interval controlled at runtime via SDK's sntp_get_update_interval() mapping */
-    sntp_set_update_interval(86400000); /* re-sync every 24h (Realtek wrapper) */
-    sntp_setservername(0, "ntp.aliyun.com");
-    sntp_init();
-    RTK_LOGI(TAG, "SNTP initialized (server: ntp.aliyun.com)\n");
+    sntp_start_once();
 
 skip_sntp:
 
@@ -770,7 +782,9 @@ skip_sntp:
                     rtos_time_delay_ms(5000);
                 }
 
-                /* WiFi came back — force re-subscribe on next MQTT cycle */
+                /* WiFi came back — start SNTP if the initial connect never
+                 * reached it, then force re-subscribe on the next cycle. */
+                sntp_start_once();
                 g_sht3x_subscribed = false;
 #if WEATHER_FETCH_MCU == 0
                 g_weather_subscribed = false;
